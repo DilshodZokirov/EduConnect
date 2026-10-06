@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>EduConnect — test</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --brand: #1f6fb2;
+    --warn: #f3a24a;
+    --bg: var(--tg-theme-secondary-bg-color, #f4f5f7);
+    --card: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #14202e);
+    --hint: var(--tg-theme-hint-color, #5b6675);
+    --line: rgba(127, 140, 155, 0.28);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 16px 16px 48px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 17px; margin: 24px 0 10px; }
+  h3 { font-size: 15px; margin: 16px 0 8px; }
+  p { margin: 4px 0; }
+  .muted { color: var(--hint); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+          padding: 14px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .top { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+  .logo { width: 48px; height: 48px; border-radius: 14px; background: var(--brand); color: #fff;
+          display: grid; place-items: center; font-weight: 800; font-size: 22px; flex-shrink: 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .item { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+          padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  input, select { width: 100%; height: 46px; border: 1px solid var(--line); border-radius: 10px;
+          padding: 0 12px; font: inherit; background: var(--card); color: var(--text); }
+  .item select { width: auto; height: 40px; }
+  .btn { height: 46px; border: none; border-radius: 10px; background: var(--brand); color: #fff;
+         font: inherit; font-weight: 700; padding: 0 16px; cursor: pointer; }
+  .btn.small { height: 40px; }
+  .btn.ghost { background: transparent; color: var(--brand); border: 1.5px solid var(--brand); }
+  .chip { height: 38px; border-radius: 999px; border: 1px solid var(--line); background: var(--card);
+          color: var(--text); font: inherit; font-weight: 600; padding: 0 12px; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  .badge { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: rgba(31,111,178,.14); color: var(--brand); }
+  .badge.absent { background: rgba(243,162,74,.22); color: #9a4a0c; }
+  .error { color: #b3261e; }
+  #toast { position: fixed; left: 16px; right: 16px; bottom: 20px; max-width: 528px; margin: 0 auto;
+           background: #14202e; color: #fff; padding: 12px 14px; border-radius: 12px; display: none; }
+</style>
+</head>
+<body>
+<main id="app"><p class="muted">Yuklanmoqda...</p></main>
+<div id="toast" role="status"></div>
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+const state = { token: null, user: null };
+const $app = document.getElementById('app');
+const ROLE = { superadmin: 'Superadmin', admin: 'Admin', mentor: 'Mentor', student: "O'quvchi", parent: 'Ota-ona' };
+const ATT = { present: 'Keldi', absent: 'Kelmadi', late: 'Kechikdi' };
+
+const byId = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fullName = (u) => esc(u.first_name + ' ' + u.last_name);
+const today = () => new Date().toISOString().slice(0, 10);
+
+function toast(msg) {
+  const t = byId('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast._t); toast._t = setTimeout(() => (t.style.display = 'none'), 3000);
+}
+
+function errText(data, status) {
+  if (data && typeof data.detail === 'string') return data.detail;
+  if (data && Array.isArray(data.detail)) return data.detail.map((e) => e.msg.replace(/^Value error, /, '')).join('; ');
+  return 'Xato ' + status;
+}
+
+async function api(path, { method = 'GET', body, auth = true } = {}) {
+  const headers = { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' };
+  if (auth && state.token) headers.Authorization = 'Bearer ' + state.token;
+  const res = await fetch('/api' + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let data = null;
+  if (res.status !== 204) { try { data = await res.json(); } catch (_) {} }
+  if (!res.ok) {
+    const err = new Error(errText(data, res.status));
+    err.status = res.status; err.detail = data && data.detail;
+    throw err;
+  }
+  return data;
+}
+
+// ---------- Kirish ----------
+
+async function start(password) {
+  if (!tg || !tg.initData) {
+    $app.innerHTML = `<div class="card"><h1>Telegram orqali oching</h1>
+      <p class="muted">Bu sahifa faqat bot ichidagi tugma orqali ishlaydi.</p></div>`;
+    return;
+  }
+  tg.ready(); tg.expand();
+  try {
+    const r = await api('/auth/login', { method: 'POST', auth: false, body: { init_data: tg.initData, password } });
+    state.token = r.access_token; state.user = r.user;
+    home();
+  } catch (e) {
+    if (e.status === 404) return showRegister();
+    if (e.status === 401 && e.detail === 'password_required') return showPassword();
+    if ((e.status === 401 || e.status === 423) && password !== undefined) return showPassword(e.message);
+    $app.innerHTML = `<div class="card"><p class="error">${esc(e.message)}</p></div>`;
+  }
+}
+
+function showRegister() {
+  const tgUser = (tg.initDataUnsafe && tg.initDataUnsafe.user) || {};
+  $app.innerHTML = `
+    <div class="top"><div class="logo">E</div><div><h1>EduConnect</h1>
+      <p class="muted">O'quv markazimizga xush kelibsiz! Ro'yxatdan o'ting.</p></div></div>
+    <form id="register-form" class="card">
+      <input name="first_name" placeholder="Ism" value="${esc(tgUser.first_name)}" required>
+      <input name="last_name" placeholder="Familiya" value="${esc(tgUser.last_name)}" required>
+      <input name="phone" placeholder="+998 90 123 45 67" inputmode="tel" required>
+      <p class="muted">Ro'yxatdan o'tganingizdan so'ng admin sizga rol beradi.</p>
+      <button class="btn">Ro'yxatdan o'tish</button>
+      <p class="error" id="form-error"></p>
+    </form>`;
+}
+
+function showPassword(error) {
+  $app.innerHTML = `
+    <div class="top"><div class="logo">E</div><div><h1>Parolni kiriting</h1>
+      <p class="muted">Profilingiz parol bilan himoyalangan.</p></div></div>
+    <form id="login-form" class="card">
+      <input name="password" type="password" placeholder="Parol" required autofocus>
+      <button class="btn">Kirish</button>
+      <p class="error">${esc(error || '')}</p>
+    </form>`;
+}
+
+// ---------- Bosh sahifa ----------
+
+function home() {
+  const u = state.user;
+  let html = `<div class="top"><div class="logo">E</div><div>
+      <h1>${fullName(u)}</h1>
+      <p class="muted">${u.role ? ROLE[u.role] : 'Rol berilmagan'}, ${esc(u.phone)}</p></div></div>`;
+
+  if (u.status === 'pending') {
+    html += `<div class="card"><h2 style="margin:0">So'rovingiz yuborildi</h2>
+      <p class="muted">Admin ma'lumotlaringizni tekshirib, sizga rol beradi. Tasdiqlangach, botda xabar olasiz.</p>
+      <button class="btn ghost" data-act="refresh">Holatni yangilash</button></div>`;
+    $app.innerHTML = html;
+    return;
+  }
+
+  const loaders = [];
+  if (u.role === 'admin' || u.role === 'superadmin') { html += '<section id="sec-admin"></section>'; loaders.push(['sec-admin', loadAdmin]); }
+  if (u.role === 'mentor') { html += '<section id="sec-mentor"></section>'; loaders.push(['sec-mentor', loadMentor]); }
+  if (u.role === 'student') { html += '<section id="sec-student"></section>'; loaders.push(['sec-student', loadStudent]); }
+  if (u.role === 'parent') { html += '<section id="sec-parent"></section>'; loaders.push(['sec-parent', loadParent]); }
+  html += '<section id="sec-profile"></section>';
+  loaders.push(['sec-profile', loadProfile]);
+  $app.innerHTML = html;
+  loaders.forEach(([id, fn]) => load(id, fn));
+}
+
+async function load(id, fn) {
+  const el = byId(id);
+  el.innerHTML = '<p class="muted">Yuklanmoqda...</p>';
+  try { el.innerHTML = await fn(); }
+  catch (e) { el.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+}
+
+// ---------- Admin ----------
+
+async function loadAdmin() {
+  const [pending, groups, mentors, students] = await Promise.all([
+    api('/admin/users?status=pending'), api('/admin/groups'),
+    api('/admin/users?role=mentor&status=active'), api('/admin/users?role=student&status=active'),
+  ]);
+  const roles = ['student', 'mentor', 'parent'].concat(state.user.role === 'superadmin' ? ['admin'] : []);
+  const studentOpts = students.map((s) => `<option value="${s.id}">${fullName(s)}</option>`).join('');
+
+  return `
+    <h2>Yangi so'rovlar (${pending.length})</h2>
+    ${pending.map((p) => `<div class="card"><b>${fullName(p)}</b><p class="muted">${esc(p.phone)}</p>
+        <p class="muted">Rolni belgilang:</p>
+        <div class="row">${roles.map((r) => `<button class="chip" data-act="role" data-id="${p.id}" data-role="${r}">${ROLE[r]}</button>`).join('')}</div>
+      </div>`).join('') || '<p class="muted">Yangi so\'rov yo\'q.</p>'}
+
+    <h2>Guruhlar</h2>
+    ${groups.map((g) => `<div class="card"><b>${esc(g.name)}</b>
+        <p class="muted">Mentor: ${g.mentor ? fullName(g.mentor) : 'biriktirilmagan'}. O'quvchilar: ${g.student_count}</p>
+        ${students.length ? `<div class="row"><select id="add-${g.id}" style="flex:1">${studentOpts}</select>
+          <button class="btn small" data-act="add-student" data-group="${g.id}">Qo'shish</button></div>`
+          : '<p class="muted">Faol o\'quvchi yo\'q — avval kimgadir o\'quvchi rolini bering.</p>'}
+      </div>`).join('') || '<p class="muted">Hali guruh yo\'q.</p>'}
+
+    <form id="group-form" class="card"><b>Yangi guruh</b>
+      <input name="name" placeholder="Guruh nomi, masalan Frontend-12" required>
+      <select name="mentor_id"><option value="">Mentor tanlang</option>
+        ${mentors.map((m) => `<option value="${m.id}">${fullName(m)}</option>`).join('')}</select>
+      <input name="schedule" placeholder="Jadval, masalan Du, Ch, Ju 14:00">
+      <button class="btn">Guruh yaratish</button>
+    </form>`;
+}
+
+// ---------- Mentor ----------
+
+async function loadMentor() {
+  const groups = await api('/mentor/groups');
+  return '<h2>Mening guruhlarim</h2>' + (groups.map((g) => `<div class="card">
+      <div class="item" style="border:none;padding:0"><span><b>${esc(g.name)}</b><br>
+        <small class="muted">${g.student_count} o'quvchi</small></span>
+        <button class="btn small ghost" data-act="open-group" data-id="${g.id}">Ochish</button></div>
+      <div id="group-${g.id}"></div></div>`).join('') || '<p class="muted">Sizga hali guruh biriktirilmagan.</p>');
+}
+
+async function openGroup(id) {
+  const box = byId('group-' + id);
+  box.innerHTML = '<p class="muted">Yuklanmoqda...</p>';
+  const [students, lessons] = await Promise.all([api(`/mentor/groups/${id}/students`), api(`/mentor/groups/${id}/lessons`)]);
+  const lesson = lessons[0];
+  const att = {};
+  if (lesson) (await api(`/mentor/lessons/${lesson.id}/attendance`)).forEach((a) => (att[a.student_id] = a.status));
+
+  box.innerHTML = `
+    <h3>O'quvchilar</h3>
+    ${students.map((s) => `<div class="item"><span>${fullName(s)}<br><small class="muted">Bog'langan ota-ona: ${s.confirmed_parents}</small></span>
+        <button class="chip" data-act="toggle-link" data-id="${s.id}">Ota-onani bog'lash</button>
+        <div id="link-${s.id}" style="width:100%;display:none">
+          <form class="row" data-form="parent-search" data-student="${s.id}" style="margin-top:8px">
+            <input name="q" placeholder="Telefon yoki ism" style="flex:1" required minlength="3">
+            <button class="btn small">Qidirish</button></form>
+          <div id="results-${s.id}"></div></div>
+      </div>`).join('') || '<p class="muted">Guruhda o\'quvchi yo\'q.</p>'}
+
+    <h3>Yo'qlama</h3>
+    ${lesson ? `<p><b>${esc(lesson.title)}</b> <span class="muted">${esc(lesson.lesson_date)}</span></p>
+      ${students.map((s) => `<div class="item"><span>${fullName(s)}</span>
+        <select data-att="${s.id}">${Object.keys(ATT).map((k) => `<option value="${k}" ${att[s.id] === k ? 'selected' : ''}>${ATT[k]}</option>`).join('')}</select></div>`).join('')}
+      <button class="btn" style="margin-top:10px" data-act="save-att" data-lesson="${lesson.id}" data-group="${id}">Yo'qlamani saqlash</button>`
+      : '<p class="muted">Hali dars yo\'q. Pastdan dars qo\'shing.</p>'}
+
+    <h3>Yangi dars</h3>
+    <form class="row" data-form="lesson" data-group="${id}">
+      <input name="title" placeholder="Dars mavzusi" required>
+      <input name="lesson_date" type="date" value="${today()}" required>
+      <button class="btn small">Dars qo'shish</button></form>`;
+}
+
+// ---------- O'quvchi ----------
+
+function attList(items) {
+  return items.map((a) => `<div class="item"><span>${esc(a.lesson_title)}<br>
+      <small class="muted">${esc(a.lesson_date)}, ${esc(a.group_name)}</small></span>
+      <span class="badge ${a.status === 'absent' ? 'absent' : ''}">${ATT[a.status]}</span></div>`).join('')
+    || '<p class="muted">Hali yo\'qlama yo\'q.</p>';
+}
+
+async function loadStudent() {
+  const [groups, att] = await Promise.all([api('/student/groups'), api('/student/attendance')]);
+  return `<h2>Guruhlarim</h2>
+    ${groups.map((g) => `<div class="card"><b>${esc(g.name)}</b><p class="muted">${esc(g.schedule || '')}</p></div>`).join('')
+      || '<p class="muted">Siz hali guruhga qo\'shilmagansiz.</p>'}
+    <h2>Davomatim</h2><div class="card">${attList(att)}</div>`;
+}
+
+// ---------- Ota-ona ----------
+
+async function loadParent() {
+  const [pending, children] = await Promise.all([api('/parent/links?status=pending'), api('/parent/children')]);
+  return `
+    ${pending.length ? '<h2>Tasdiqlash kutilmoqda</h2>' : ''}
+    ${pending.map((l) => `<div class="card"><p>Sizni <b>${fullName(l.student)}</b> ning ota-onasi sifatida bog'lashdi.</p>
+        <div class="row"><button class="btn small" data-act="link-decide" data-id="${l.id}" data-d="confirm">Tasdiqlash</button>
+        <button class="btn small ghost" data-act="link-decide" data-id="${l.id}" data-d="reject">Rad etish</button></div></div>`).join('')}
+    <h2>Farzandlarim</h2>
+    ${children.map((c) => `<div class="card"><b>${fullName(c)}</b>
+        <p class="muted">${esc(c.groups.join(', ') || 'Guruhga qo\'shilmagan')}</p>
+        <button class="btn small ghost" data-act="child-att" data-id="${c.id}">Davomatni ko'rish</button>
+        <div id="child-${c.id}"></div></div>`).join('')
+      || '<p class="muted">Hali farzand bog\'lanmagan. Mentor sizni farzandingizga bog\'laydi.</p>'}`;
+}
+
+// ---------- Profil ----------
+
+async function loadProfile() {
+  const u = state.user;
+  return `<h2>Parol</h2>
+    <form id="password-form" class="card">
+      <p class="muted">${u.has_password ? 'Parol o\'rnatilgan. Almashtirish uchun joriy parolni kiriting.' : 'Parol o\'rnatilmagan. Parol qo\'ysangiz, ilova har ochilganda so\'raladi.'}</p>
+      ${u.has_password ? '<input name="current_password" type="password" placeholder="Joriy parol" required>' : ''}
+      <input name="new_password" type="password" placeholder="Yangi parol (kamida 8 belgi, 1 ta raqam)" required minlength="8">
+      <button class="btn">Parolni saqlash</button>
+    </form>`;
+}
+
+// ---------- Tugmalar ----------
+
+async function busy(btn, fn) {
+  if (btn) btn.disabled = true;
+  try { await fn(); }
+  catch (e) { toast(e.message); }
+  finally { if (btn && btn.isConnected) btn.disabled = false; }
+}
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const d = b.dataset;
+  busy(b, async () => {
+    switch (d.act) {
+      case 'refresh':
+        state.user = await api('/me'); home(); break;
+      case 'role':
+        await api(`/admin/users/${d.id}/role`, { method: 'POST', body: { role: d.role } });
+        toast('Rol berildi: ' + ROLE[d.role]); load('sec-admin', loadAdmin); break;
+      case 'add-student':
+        await api(`/admin/groups/${d.group}/students`, { method: 'POST', body: { student_ids: [Number(byId('add-' + d.group).value)] } });
+        toast("O'quvchi guruhga qo'shildi"); load('sec-admin', loadAdmin); break;
+      case 'open-group':
+        await openGroup(d.id); break;
+      case 'toggle-link': {
+        const box = byId('link-' + d.id); box.style.display = box.style.display === 'none' ? 'block' : 'none'; break;
+      }
+      case 'do-link':
+        await api(`/mentor/students/${d.student}/parents`, { method: 'POST', body: { parent_id: Number(d.parent) } });
+        toast("So'rov yuborildi. Ota-ona tasdiqlashi kerak"); byId('results-' + d.student).innerHTML = ''; break;
+      case 'save-att': {
+        const items = [...byId('group-' + d.group).querySelectorAll('[data-att]')]
+          .map((s) => ({ student_id: Number(s.dataset.att), status: s.value }));
+        await api(`/mentor/lessons/${d.lesson}/attendance`, { method: 'PUT', body: { items } });
+        toast("Yo'qlama saqlandi. Kelmaganlarning ota-onasiga xabar ketdi"); break;
+      }
+      case 'link-decide':
+        await api(`/parent/links/${d.id}/${d.d}`, { method: 'POST' });
+        toast(d.d === 'confirm' ? 'Tasdiqlandi' : 'Rad etildi'); load('sec-parent', loadParent); break;
+      case 'child-att':
+        byId('child-' + d.id).innerHTML = attList(await api(`/parent/children/${d.id}/attendance`)); break;
+    }
+  });
+});
+
+document.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const v = Object.fromEntries(new FormData(f));
+  const btn = f.querySelector('button');
+  busy(btn, async () => {
+    if (f.id === 'register-form') {
+      try {
+        const r = await api('/auth/register', { method: 'POST', auth: false, body: { init_data: tg.initData, ...v } });
+        state.token = r.access_token; state.user = r.user; home();
+      } catch (err) { byId('form-error').textContent = err.message; }
+    } else if (f.id === 'login-form') {
+      await start(v.password);
+    } else if (f.id === 'group-form') {
+      await api('/admin/groups', { method: 'POST', body: {
+        name: v.name, schedule: v.schedule || null, mentor_id: v.mentor_id ? Number(v.mentor_id) : null } });
+      toast('Guruh yaratildi'); load('sec-admin', loadAdmin);
+    } else if (f.id === 'password-form') {
+      const r = await api('/me/password', { method: 'POST', body: v });
+      state.token = r.access_token; state.user = r.user;
+      toast('Parol saqlandi'); load('sec-profile', loadProfile);
+    } else if (f.dataset.form === 'lesson') {
+      await api(`/mentor/groups/${f.dataset.group}/lessons`, { method: 'POST', body: v });
+      toast("Dars qo'shildi"); await openGroup(f.dataset.group);
+    } else if (f.dataset.form === 'parent-search') {
+      const sid = f.dataset.student;
+      const list = await api('/mentor/parents/search?q=' + encodeURIComponent(v.q));
+      byId('results-' + sid).innerHTML = list.map((p) => `<div class="item"><span>${fullName(p)}<br>
+          <small class="muted">${esc(p.phone_masked)}, farzandlari: ${p.children_count}</small></span>
+          <button class="btn small" data-act="do-link" data-student="${sid}" data-parent="${p.id}">Bog'lash</button></div>`).join('')
+        || '<p class="muted">Topilmadi. Ota-ona ro\'yxatdan o\'tgan va unga «ota-ona» roli berilgan bo\'lishi kerak.</p>';
+    }
+  });
+});
+
+start();
+</script>
+</body>
+</html>
