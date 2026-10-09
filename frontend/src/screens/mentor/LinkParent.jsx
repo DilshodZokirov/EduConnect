@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, initials } from '../../api.js';
-import { useApi, useDebounced, useToast } from '../../hooks.jsx';
+import { confirmDialog, useApi, useDebounced, useToast } from '../../hooks.jsx';
 import Icon from '../../components/Icon.jsx';
 import {
   Avatar, Card, Content, ErrorBox, Header, Loading, Pill, SearchField, useTelegramBack,
@@ -29,6 +29,39 @@ export default function LinkParent() {
   const results = useApi(term.length >= 3 ? `/mentor/parents/search?q=${encodeURIComponent(term)}` : null);
   const [busyId, setBusyId] = useState(null);
   const [guardianBusy, setGuardianBusy] = useState(false);
+
+  async function makeParent() {
+    if (!(await confirmDialog(`${student.first_name} ${student.last_name} aslida ota-onami? U guruhdan chiqariladi va ota-ona sifatida qoladi — keyin farzandini havola orqali tanlaydi.`))) return;
+    try {
+      await api(`/mentor/users/${student.id}/role`, { method: 'POST', body: { role: 'parent' } });
+      toast('Rol tuzatildi: endi u ota-ona');
+      back();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function unlink(l) {
+    if (!(await confirmDialog(`${l.parent.first_name} ${l.parent.last_name}ning bu o'quvchi bilan bog'lanishi bekor qilinsinmi?`))) return;
+    try {
+      await api(`/mentor/students/${sid}/parents/${l.id}`, { method: 'DELETE' });
+      toast("Bog'lanish bekor qilindi");
+      links.setData((list) => list.filter((x) => x.id !== l.id));
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function removeFromGroup() {
+    if (!(await confirmDialog(`${student.first_name} ${student.last_name} guruhdan chiqarilsinmi?`))) return;
+    try {
+      await api(`/mentor/groups/${gid}/students/${student.id}`, { method: 'DELETE' });
+      toast('Guruhdan chiqarildi');
+      back();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
 
   async function toggleGuardian() {
     const value = !student.self_guardian;
@@ -121,6 +154,7 @@ export default function LinkParent() {
         })}
 
         <h2 className="section-title">Bog'langan ota-onalar</h2>
+        {/* rolni tuzatish va chiqarish pastda */}
         {links.loading && !links.data && <Loading />}
         {links.data?.length === 0 && <p className="muted small">Hali hech kim bog'lanmagan.</p>}
         {links.data?.length > 0 && (
@@ -130,9 +164,20 @@ export default function LinkParent() {
                 <Avatar text={initials(l.parent)} size={36} />
                 <b className="grow">{l.parent.first_name} {l.parent.last_name}</b>
                 <Pill tone={LINK_STATUS[l.status].tone}>{LINK_STATUS[l.status].text}</Pill>
+                <button type="button" className="icon-btn icon-btn-danger" aria-label="Bog'lanishni bekor qilish"
+                  title="Bog'lanishni bekor qilish" onClick={() => unlink(l)}>
+                  <Icon name="trash" size={18} />
+                </button>
               </div>
             ))}
           </Card>
+        )}
+
+        {student && (
+          <div className="stack danger-zone">
+            <button type="button" className="link-btn link-muted" onClick={makeParent}>Adashibdi — bu ota-ona, o'quvchi emas</button>
+            <button type="button" className="link-btn link-danger" onClick={removeFromGroup}>Guruhdan chiqarish</button>
+          </div>
         )}
       </Content>
     </>

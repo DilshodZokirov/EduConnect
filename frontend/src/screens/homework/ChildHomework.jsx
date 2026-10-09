@@ -17,7 +17,7 @@ export function ChildHomeworkSummary({ childId }) {
   const navigate = useNavigate();
   const { data } = useApi(`/parent/children/${childId}/homework`);
   if (!data?.length) return null;
-  const graded = data.filter((h) => h.final_score !== null);
+  const graded = data.filter((h) => h.final_score != null);
   const avg = graded.length ? Math.round(graded.reduce((a, h) => a + h.final_score, 0) / graded.length) : null;
   const missing = data.filter((h) => h.status === 'missing').length;
   return (

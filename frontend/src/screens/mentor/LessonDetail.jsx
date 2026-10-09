@@ -4,7 +4,7 @@ import { api, apiUpload } from '../../api.js';
 import { formatDate } from '../../dates.js';
 import { confirmDialog, useApi, useToast } from '../../hooks.jsx';
 import {
-  formatDuration, formatSize, openMaterial, sendToTelegram, uploadVideo,
+  expiryLabel, formatDuration, formatSize, openMaterial, sendToTelegram, uploadVideo,
 } from '../../materials.js';
 import Icon from '../../components/Icon.jsx';
 import { AssignmentCard } from '../homework/MentorList.jsx';
@@ -164,7 +164,7 @@ function MaterialRow({ material, onOpenVideo, onRemove }) {
   const processing = BUSY_STATUSES.includes(m.status);
   let sub = '';
   if (m.kind === 'link') sub = 'Havola';
-  else if (m.kind === 'video') sub = [formatDuration(m.duration_seconds), formatSize(m.size_bytes)].filter(Boolean).join(' · ');
+  else if (m.kind === 'video') sub = [formatDuration(m.duration_seconds), formatSize(m.size_bytes), expiryLabel(m)].filter(Boolean).join(' · ');
   else sub = formatSize(m.size_bytes);
 
   return (
@@ -181,6 +181,7 @@ function MaterialRow({ material, onOpenVideo, onRemove }) {
       </div>
 
       {processing && <Pill tone="warn">{m.status === 'uploading' ? 'Yuklanmoqda…' : 'Video siqilmoqda…'}</Pill>}
+      {m.source === 'recording' && m.status === 'ready' && <Pill tone="grey">Ekran yozuvi · 7 kun saqlanadi</Pill>}
       {m.status === 'failed' && <p className="error-box">Videoni qayta ishlab bo'lmadi. O'chirib, qayta yuklang.</p>}
 
       {m.status === 'ready' && (
@@ -272,6 +273,15 @@ export default function LessonDetail() {
           </div>
         </div>
 
+        <button type="button" className="rec-cta" onClick={() => navigate(`/g/${gid}/lessons/${lid}/record`)}>
+          <span className="rec-dot" aria-hidden="true" />
+          <span className="grow">
+            <b>Darsni ekrandan yozish</b>
+            <span className="muted small">Ekran va ovoz yoziladi, o'quvchilarga o'zi yuboriladi</span>
+          </span>
+          <Icon name="right" size={18} />
+        </button>
+
         {editing && <EditLesson lesson={lesson} onSaved={(l) => { setLesson(l); setEditing(false); lessons.reload(); }} />}
 
         <h2 className="section-title">Materiallar</h2>
@@ -286,8 +296,8 @@ export default function LessonDetail() {
         )}
 
         <div className="section-head">
-          <h2 className="section-title">Uy vazifasi</h2>
-          <button type="button" className="link-btn" onClick={() => navigate(`/g/${gid}/lessons/${lid}/homework/new`)}>+ Vazifa berish</button>
+          <h2 className="section-title">Vazifalar</h2>
+          <button type="button" className="link-btn" onClick={() => navigate(`/g/${gid}/lessons/${lid}/assign`)}>+ Topshiriq berish</button>
         </div>
         {assignments.data?.filter((a) => String(a.lesson_id) === lid).map((a) => (
           <AssignmentCard key={a.id} a={a} onClick={() => navigate(`/g/${gid}/homework/${a.id}`)} />

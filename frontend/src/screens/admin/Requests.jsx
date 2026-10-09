@@ -1,14 +1,15 @@
 import { useState } from 'react';
-import { api, formatPhone, initials, ROLE_NAMES } from '../../api.js';
+import { api, formatPhone, GRANTABLE, initials, ROLE_NAMES } from '../../api.js';
 import { useAuth } from '../../auth.jsx';
 import { confirmDialog, timeAgo, useApi, useToast } from '../../hooks.jsx';
 import {
   Avatar, Button, Card, Chip, Content, EmptyState, ErrorBox, Header, IconButton, Loading, Pill,
 } from '../../components/ui.jsx';
 
-function RequestCard({ person, roles, onDone }) {
+function RequestCard({ person, roles, viewerRole, onDone }) {
   const toast = useToast();
-  const [role, setRole] = useState(null);
+  const wanted = person.requested_role === 'admin' ? 'admin' : 'mentor';
+  const [role, setRole] = useState(roles.includes(wanted) ? wanted : null);
   const [busy, setBusy] = useState(false);
 
   async function approve() {
@@ -43,9 +44,11 @@ function RequestCard({ person, roles, onDone }) {
         <div className="grow">
           <h3 className="item-title">{person.first_name} {person.last_name}</h3>
           <p className="muted small">{formatPhone(person.phone)} · {timeAgo(person.created_at)}</p>
+          {person.branch_name && <p className="muted small">Filial: {person.branch_name}</p>}
         </div>
+        <Pill tone={wanted === 'admin' ? 'warn' : 'blue'}>{wanted === 'admin' ? 'Admin' : 'Mentor'}</Pill>
       </div>
-      <p className="muted small">Rolni belgilang:</p>
+      <p className="muted small">{wanted === 'admin' ? "Admin bo'lishni so'ramoqda. Tasdiqlang yoki boshqa rol bering:" : "Mentor bo'lishni so'ramoqda:"}</p>
       <div className="chips">
         {roles.map((r) => <Chip key={r} active={role === r} onClick={() => setRole(r)}>{ROLE_NAMES[r]}</Chip>)}
       </div>
@@ -95,7 +98,7 @@ function PhoneRequests() {
 export default function Requests() {
   const { user } = useAuth();
   const { data, error, loading, reload, setData } = useApi('/admin/users?status=pending');
-  const roles = ['student', 'mentor', 'parent', ...(user.role === 'superadmin' ? ['admin'] : [])];
+  const roles = GRANTABLE[user.role] ?? [];
 
   return (
     <>
@@ -109,7 +112,7 @@ export default function Requests() {
             text="Kimdir botda ro'yxatdan o'tsa, shu yerda paydo bo'ladi va sizga Telegram'da xabar keladi." />
         )}
         {data?.map((p) => (
-          <RequestCard key={p.id} person={p} roles={roles}
+          <RequestCard key={p.id} person={p} roles={roles} viewerRole={user.role}
             onDone={(id) => setData((list) => list.filter((x) => x.id !== id))} />
         ))}
         <PhoneRequests />

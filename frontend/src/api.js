@@ -61,7 +61,9 @@ export async function apiUpload(path, formData) {
 
 export const ROLE_NAMES = {
   superadmin: 'Superadmin',
-  admin: 'Admin',
+  general_manager: 'Umumiy menejer',
+  regional_manager: 'Hududiy menejer',
+  admin: 'Filial admini',
   mentor: 'Mentor',
   student: "O'quvchi",
   parent: 'Ota-ona',
@@ -85,3 +87,35 @@ export const money = (x) => (x ?? 0).toLocaleString('ru-RU').replace(/\u00a0/g, 
 
 /** "890 000 so'm" kiritilgan matndan raqam */
 export const parseMoney = (text) => Number(String(text).replace(/\D/g, '')) || 0;
+
+/** Boshqaruv rollari va kim qaysi rolni bera oladi (backend bilan bir xil). */
+export const STAFF_ROLES = ['superadmin', 'general_manager', 'regional_manager', 'admin'];
+// O'quvchi va ota-onalar guruh havolasi orqali qo'shiladi — admin faqat xodim rollarini beradi
+const BASIC = ['mentor'];
+export const GRANTABLE = {
+  admin: [...BASIC],
+  regional_manager: [...BASIC, 'admin'],
+  general_manager: [...BASIC, 'admin', 'regional_manager'],
+  superadmin: [...BASIC, 'admin', 'regional_manager', 'general_manager'],
+};
+export const isManager = (role) => ['superadmin', 'general_manager', 'regional_manager'].includes(role);
+export const isGeneral = (role) => ['superadmin', 'general_manager'].includes(role);
+
+/** Guruh havolasi tokeni (bot ?join= bilan ochganda saqlanadi). */
+export const joinToken = {
+  get: () => { try { return sessionStorage.getItem('join.token'); } catch { return null; } },
+  clear: () => { try { sessionStorage.removeItem('join.token'); } catch { /* */ } },
+};
+
+/** Bir martalik saqlanadigan qiymatlar (bot havolasidagi ?record= va ?code=). */
+function sessionValue(key) {
+  return {
+    get: () => { try { return sessionStorage.getItem(key); } catch { return null; } },
+    set: (v) => { try { sessionStorage.setItem(key, v); } catch { /* */ } },
+    take: () => {
+      try { const v = sessionStorage.getItem(key); sessionStorage.removeItem(key); return v; } catch { return null; }
+    },
+  };
+}
+export const recordTarget = sessionValue('record.target'); // "guruhId.darsId" — ochilganda yozish sahifasiga o'tiladi
+export const loginCode = sessionValue('login.code');       // brauzerda bir martalik kirish kodi

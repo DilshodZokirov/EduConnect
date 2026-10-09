@@ -1,5 +1,6 @@
 """EduConnect Telegram boti: /start da kutib olish xabari va Web App tugmasi."""
 import asyncio
+import hashlib
 import html
 import logging
 import os
@@ -8,7 +9,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     BotCommand, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Message, WebAppInfo,
 )
@@ -18,6 +19,7 @@ log = logging.getLogger("bot")
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "").strip()
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:8000")
 WELCOME_IMAGE = Path(__file__).parent / "welcome.png"
 
 # Botni ochmasdan oldin ko'rinadigan matn ("Bu bot nima qila oladi?")
@@ -42,8 +44,10 @@ WELCOME = (
 HELP = (
     "ℹ️ <b>Qanday foydalaniladi</b>\n\n"
     "1. «Ochish» tugmasini bosing.\n"
-    "2. Birinchi marta kirsangiz, ism va telefon raqamingiz bilan ro'yxatdan o'ting.\n"
-    "3. Admin sizga rol beradi: o'quvchi, mentor yoki ota-ona. Tasdiqlanganda shu yerga xabar keladi.\n\n"
+    "2. O'quvchi yoki ota-ona bo'lsangiz — o'qituvchingiz bergan guruh havolasini oching: "
+    "ro'yxatdan o'tasiz va darhol guruhga qo'shilasiz.\n"
+    "3. O'qituvchi yoki xodim bo'lsangiz — filialni tanlab ro'yxatdan o'ting, filial admini tasdiqlagach "
+    "shu yerga xabar keladi.\n\n"
     "Ilovani istalgan vaqtda pastki chap burchakdagi «Ochish» tugmasi orqali ham ochishingiz mumkin."
 )
 
@@ -55,6 +59,66 @@ def open_keyboard() -> InlineKeyboardMarkup:
 
 
 dp = Dispatcher()
+
+
+async def invite_info(token: str) -> dict | None:
+    """Guruh havolasi ma'lumoti (backend'dan): markaz, filial, guruh, o'qituvchi, jadval."""
+    import aiohttp  # aiogram bilan birga o'rnatilgan
+
+    try:
+        async with aiohttp.ClientSession() as http, http.get(f"{BACKEND_URL}/api/public/invite/{token}", timeout=10) as r:
+            return await r.json() if r.status == 200 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def remember_invite(telegram_id: int, token: str) -> None:
+    """Havolani backendda eslab qolamiz: foydalanuvchi ilovani pastdagi «Ochish» tugmasidan ochsa ham guruh topiladi."""
+    import aiohttp  # aiogram bilan birga o'rnatilgan
+
+    key = hashlib.sha256(BOT_TOKEN.encode()).hexdigest()
+    try:
+        async with aiohttp.ClientSession() as http, http.post(
+            f"{BACKEND_URL}/api/bot/pending-invite", json={"telegram_id": telegram_id, "token": token},
+            headers={"X-Bot-Key": key}, timeout=10,
+        ) as r:
+            if r.status != 204:
+                log.warning("Havola eslab qolinmadi: %s", r.status)
+    except Exception:  # noqa: BLE001
+        log.exception("Havola eslab qolinmadi")
+
+
+async def start_from_invite(message: Message, token: str) -> None:
+    info = await invite_info(token)
+    if not info:
+        await message.answer("⚠️ Bu havola eskirgan yoki o'chirilgan. O'qituvchingizdan yangi havola so'rang.")
+        return
+    await remember_invite(message.from_user.id, token)
+    lines = [f"🏫 <b>{html.escape(info['center_name'])}</b>"]
+    if info.get("branch_name"):
+        addr = f" ({html.escape(info['branch_address'])})" if info.get("branch_address") else ""
+        lines.append(f"📍 Filial: {html.escape(info['branch_name'])}{addr}")
+    lines.append(f"👥 Guruh: <b>{html.escape(info['group_name'])}</b>")
+    if info.get("mentor_name"):
+        lines.append(f"👨‍🏫 O'qituvchi: {html.escape(info['mentor_name'])}")
+    if info.get("schedule"):
+        lines.append(f"🕒 Jadval: {html.escape(info['schedule'])}")
+    lines.append("\nMa'lumotlar to'g'ri bo'lsa, «✅ Guruhga qo'shilish» tugmasini bosing va <b>o'quvchi</b> yoki "
+                 "<b>ota-ona</b> sifatida qo'shiling 👇\n\n<i>Pastdagi «Ochish» tugmasi ham shu guruhga olib kiradi.</i>")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Guruhga qo'shilish", web_app=WebAppInfo(url=f"{WEBAPP_URL}?join={token}")),
+    ]])
+    await message.answer("\n".join(lines), reply_markup=kb)
+
+
+@dp.message(CommandStart(deep_link=True))
+async def start_deep(message: Message, command: CommandObject) -> None:
+    """t.me/<bot>?start=g_<token> — guruh havolasi."""
+    args = command.args or ""
+    if args.startswith("g_"):
+        await start_from_invite(message, args[2:])
+    else:
+        await start(message)
 
 
 @dp.message(CommandStart())

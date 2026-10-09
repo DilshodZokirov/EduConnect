@@ -48,7 +48,7 @@ export function formatDuration(sec) {
 }
 
 /** Bitta bo'lakni omborga yuklaydi va ETag qaytaradi. */
-function putPart(url, blob, onLoaded) {
+export function putPart(url, blob, onLoaded = () => {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url);
@@ -115,4 +115,13 @@ export async function uploadVideo(lessonId, file, name, onProgress) {
     api(`/mentor/videos/${material.id}/abort`, { method: 'POST' }).catch(() => {});
     throw e;
   }
+}
+
+const MONTHS = ['yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun', 'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr'];
+
+/** Ekrandan yozilgan video qachon o'chishi: "15-oktabrgacha" (oddiy yuklangan videolar uchun ''). */
+export function expiryLabel(material) {
+  if (material.source !== 'recording' || !material.expires_at) return '';
+  const d = new Date(material.expires_at);
+  return `${d.getDate()}-${MONTHS[d.getMonth()]}gacha`;
 }

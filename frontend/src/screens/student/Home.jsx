@@ -5,6 +5,7 @@ import { AttendanceDots, summarize } from '../../components/Attendance.jsx';
 import Icon from '../../components/Icon.jsx';
 import { Card, Content, EmptyState, ErrorBox, Header, Loading } from '../../components/ui.jsx';
 import { useStudentData } from './useStudentData.js';
+import { RatingSummary } from '../rating/RatingPages.jsx';
 
 function GroupToday({ group }) {
   const navigate = useNavigate();
@@ -37,6 +38,8 @@ export default function StudentHome() {
   const { user, groups } = useStudentData();
   const attendance = useApi('/student/attendance');
   const homework = useApi('/student/assignments');
+  const tests = useApi('/student/tests');
+  const openTests = tests.data?.filter((t) => t.can_start).length ?? 0;
   const todo = homework.data?.filter((a) => a.status === 'new' || a.status === 'overdue').length ?? 0;
   const stats = summarize(attendance.data ?? []);
 
@@ -59,6 +62,12 @@ export default function StudentHome() {
                 <span className="tile-icon"><Icon name="checksq" size={22} /></span>
                 <span className="tile-title">{stats.percent === null ? '—' : `${stats.percent}%`}</span>
                 <span className="tile-sub">Davomat</span>
+              </button>
+              <RatingSummary groupId={groups.data[0]?.id} studentId={user.id} to="/rating" />
+              <button type="button" className={`tile ${openTests ? 'tile-warn' : ''}`} onClick={() => navigate('/tests')}>
+                <span className="tile-icon"><Icon name="checksq" size={22} /></span>
+                <span className="tile-title">Testlar</span>
+                <span className="tile-sub">{openTests ? `${openTests} ta test kutmoqda` : "Ochiq test yo'q"}</span>
               </button>
               <button type="button" className={`tile ${todo ? 'tile-warn' : ''}`} onClick={() => navigate('/homework')}>
                 <span className="tile-icon"><Icon name="test" size={22} /></span>

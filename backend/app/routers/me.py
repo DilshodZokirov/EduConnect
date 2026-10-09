@@ -14,6 +14,7 @@ from app.security import create_access_token, hash_password, verify_password
 from app.config import settings
 from app.services import billing, notify
 from app.services.otp import issue_otp, verify_otp
+from app.services.profiles import phone_taken, set_phone_everywhere
 
 router = APIRouter(prefix="/me", tags=["Profil"])
 
@@ -58,6 +59,11 @@ async def update_me(data: ProfileUpdateIn, user: User = Depends(get_current_user
 
 # ---------- Parol ----------
 
+async def _same_password_everywhere(session: AsyncSession, user: User) -> None:
+    """Parol odamga tegishli — uning barcha profillarida bir xil."""
+    await session.execute(update(User).where(User.telegram_id == user.telegram_id, User.id != user.id)
+                          .values(password_hash=user.password_hash))
+
 @router.post("/password", response_model=TokenOut)
 async def set_password(data: PasswordSetIn, user: User = Depends(get_current_user),
                        session: AsyncSession = Depends(get_session)):
@@ -67,6 +73,7 @@ async def set_password(data: PasswordSetIn, user: User = Depends(get_current_use
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Joriy parol noto'g'ri")
     user.password_hash = hash_password(data.new_password)
     user.token_version += 1
+    await _same_password_everywhere(session, user)
     await session.commit()
     return _token(user)
 
@@ -78,6 +85,7 @@ async def remove_password(data: PasswordRemoveIn, user: User = Depends(get_curre
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Joriy parol noto'g'ri")
     user.password_hash = None
     user.token_version += 1
+    await _same_password_everywhere(session, user)
     await session.commit()
     return _token(user)
 
@@ -123,7 +131,7 @@ async def phone_start(data: PhoneChangeStartIn, user: User = Depends(get_current
                       session: AsyncSession = Depends(get_session)):
     if data.new_phone == user.phone:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Bu sizning hozirgi raqamingiz")
-    if await session.scalar(select(User.id).where(User.phone == data.new_phone)):
+    if await phone_taken(session, data.new_phone, user.telegram_id):
         raise HTTPException(status.HTTP_409_CONFLICT, "Bu raqam boshqa foydalanuvchida")
 
     await session.execute(
@@ -156,12 +164,12 @@ async def phone_verify_old(data: CodeIn, bg: BackgroundTasks, user: User = Depen
                            session: AsyncSession = Depends(get_session)):
     req = await _active_request(session, user.id, PhoneChangeStatus.awaiting_old)
     await verify_otp(session, user.id, OtpPurpose.phone_old, data.code)
-    if await session.scalar(select(User.id).where(User.phone == req.new_phone, User.id != user.id)):
+    if await phone_taken(session, req.new_phone, user.telegram_id):
         req.status = PhoneChangeStatus.cancelled
         await session.commit()
         raise HTTPException(status.HTTP_409_CONFLICT, "Bu raqam boshqa foydalanuvchida")
 
-    user.phone = req.new_phone
+    await set_phone_everywhere(session, user, req.new_phone)
     req.status = PhoneChangeStatus.done
     await session.commit()
     bg.add_task(notify.phone_changed, user.id, req.old_phone, req.new_phone)

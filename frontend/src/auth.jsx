@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { api, setToken, tg } from './api.js';
+import { api, joinToken, loginCode, setToken, tg } from './api.js';
 
 const AuthContext = createContext(null);
 
@@ -14,8 +14,25 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (password) => {
     if (!tg?.initData) {
+      // Telegram'dan tashqarida (masalan, Chrome'da darsni yozish uchun) — bir martalik kod bilan kirish
+      const code = loginCode.take();
+      if (code) {
+        try {
+          applySession(await api('/auth/code-login', { method: 'POST', auth: false, body: { code } }));
+        } catch (e) {
+          setState({ phase: 'error', user: null, error: e.message });
+        }
+        return;
+      }
       setState({ phase: 'no-telegram', user: null, error: null });
       return;
+    }
+    // Bot guruh havolasini ko'rsatgan bo'lsa — ilova pastdagi «Ochish»dan ochilsa ham o'sha guruh qo'llanadi
+    if (password === undefined && !joinToken.get()) {
+      try {
+        const p = await api('/auth/pending-invite', { method: 'POST', auth: false, body: { init_data: tg.initData } });
+        if (p?.token) sessionStorage.setItem('join.token', p.token);
+      } catch { /* muhim emas */ }
     }
     try {
       const r = await api('/auth/login', { method: 'POST', auth: false, body: { init_data: tg.initData, password } });
@@ -32,7 +49,6 @@ export function AuthProvider({ children }) {
     if (tg) {
       tg.ready();
       tg.expand();
-      try { tg.setHeaderColor('#ffffff'); tg.setBackgroundColor('#f4f5f7'); } catch { /* eski Telegram */ }
       // Telefonda ilova butun ekranni egallaydi (Telegram 8.0+)
       const isPhone = ['android', 'ios'].includes(tg.platform);
       if (isPhone && tg.isVersionAtLeast?.('8.0')) {
@@ -54,7 +70,16 @@ export function AuthProvider({ children }) {
     return user;
   }, []);
 
-  const value = { ...state, login, register, refreshUser, applySession };
+  /** Bir Telegram hisobidagi boshqa profilga o'tish (masalan, superadmin ↔ mentor). */
+  const switchProfile = useCallback(async (profileId) => {
+    const r = await api('/me/profiles/switch', { method: 'POST', body: { profile_id: profileId } });
+    applySession(r);
+    window.history.replaceState(null, '', '/app/');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    return r.user;
+  }, [applySession]);
+
+  const value = { ...state, login, register, refreshUser, applySession, switchProfile };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

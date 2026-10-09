@@ -15,15 +15,15 @@ from app.config import settings
 from app.db import get_session
 from app.deps import MentorUser, ParentUser, StudentUser, assert_not_locked, get_current_user
 from app.models import (
-    Assignment, Group, GroupStudent, Lesson, LinkStatus, ParentLink, Role, Submission, SubmissionFile,
+    STAFF_ROLES, Assignment, Group, GroupStudent, Lesson, LinkStatus, ParentLink, Role, Submission, SubmissionFile,
     SubmissionStatus, User, UserStatus,
 )
 from app.routers.common import can_access_group
 from app.schemas import (
     AssignmentDetailOut, AssignmentIn, AssignmentOut, AssignmentUpdateIn, ChildHomeworkOut, GradeIn,
-    MaterialUrlOut, MySubmissionOut, StudentAssignmentOut, SubmissionFileOut, SubmissionOut, UserShort,
+    CheckIn, MaterialUrlOut, MySubmissionOut, StudentAssignmentOut, SubmissionFileOut, SubmissionOut, UserShort,
 )
-from app.services import ai_grader, notify, storage
+from app.services import ai_grader, code_runner, notify, storage
 
 router = APIRouter(tags=["Uy vazifasi"])
 MB = 1024 * 1024
@@ -44,6 +44,8 @@ def _criteria(sub: Submission) -> list[dict]:
 def submission_out(sub: Submission, student: User) -> SubmissionOut:
     return SubmissionOut(
         id=sub.id, student=UserShort.model_validate(student), text=sub.text, is_code=sub.is_code,
+        language=sub.language, test_results=sub.test_results or [], tests_passed=sub.tests_passed,
+        tests_total=sub.tests_total,
         submitted_at=sub.submitted_at, late=sub.late, attempt=sub.attempt, ai_status=sub.ai_status,
         ai_score=sub.ai_score, ai_feedback=sub.ai_feedback, ai_criteria=_criteria(sub),
         final_score=sub.final_score, mentor_comment=sub.mentor_comment, graded_at=sub.graded_at,
@@ -57,7 +59,8 @@ def my_submission_out(sub: Submission) -> MySubmissionOut:
     if sub.final_score is not None:
         comments = _criteria(sub)
     return MySubmissionOut(
-        text=sub.text, is_code=sub.is_code, submitted_at=sub.submitted_at, late=sub.late, attempt=sub.attempt,
+        text=sub.text, is_code=sub.is_code, language=sub.language, tests_passed=sub.tests_passed,
+        tests_total=sub.tests_total, submitted_at=sub.submitted_at, late=sub.late, attempt=sub.attempt,
         ai_status=sub.ai_status, ai_feedback=sub.ai_feedback, ai_comments=comments,
         final_score=sub.final_score, mentor_comment=sub.mentor_comment,
         files=[SubmissionFileOut.model_validate(f) for f in sub.files],
@@ -80,10 +83,8 @@ async def _own_assignment(session: AsyncSession, user: User, assignment_id: int)
     a = await session.get(Assignment, assignment_id)
     if a is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Vazifa topilmadi")
-    if user.role == Role.mentor:
-        mentor_id = await session.scalar(select(Group.mentor_id).where(Group.id == a.group_id))
-        if mentor_id != user.id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Vazifa topilmadi")
+    if not await can_access_group(session, user, a.group_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Vazifa topilmadi")
     return a
 
 
@@ -91,10 +92,8 @@ async def _own_lesson_group(session: AsyncSession, user: User, lesson_id: int) -
     lesson = await session.get(Lesson, lesson_id)
     if lesson is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Dars topilmadi")
-    if user.role == Role.mentor:
-        mentor_id = await session.scalar(select(Group.mentor_id).where(Group.id == lesson.group_id))
-        if mentor_id != user.id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Dars topilmadi")
+    if not await can_access_group(session, user, lesson.group_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dars topilmadi")
     return lesson
 
 
@@ -106,9 +105,13 @@ async def create_assignment(lesson_id: int, data: AssignmentIn, bg: BackgroundTa
     lesson = await _own_lesson_group(session, user, lesson_id)
     if data.due_at <= now():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Muddat kelajakda bo'lishi kerak")
+    if data.kind == "code" and data.language not in code_runner.ALL_LANGUAGES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Bu dasturlash tili qo'llab-quvvatlanmaydi")
     a = Assignment(lesson_id=lesson.id, group_id=lesson.group_id, title=data.title.strip(),
                    description=data.description.strip(), criteria=data.criteria.strip(), due_at=data.due_at,
-                   created_by=user.id)
+                   created_by=user.id, kind=data.kind, language=data.language if data.kind == "code" else None,
+                   starter_code=data.starter_code if data.kind == "code" else None, expected=data.expected,
+                   test_cases=[c.model_dump() for c in data.test_cases] if data.kind == "code" else [])
     session.add(a)
     await session.commit()
     await session.refresh(a)
@@ -138,9 +141,8 @@ async def upload_assignment_file(assignment_id: int, file: UploadFile = File(...
 
 @router.get("/mentor/groups/{group_id}/assignments", response_model=list[AssignmentOut])
 async def group_assignments(group_id: int, user: User = MentorUser, session: AsyncSession = Depends(get_session)):
-    if user.role == Role.mentor:
-        if await session.scalar(select(Group.mentor_id).where(Group.id == group_id)) != user.id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Guruh topilmadi")
+    if not await can_access_group(session, user, group_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Guruh topilmadi")
     items = await session.scalars(select(Assignment).where(Assignment.group_id == group_id).order_by(Assignment.due_at.desc()))
     return [await _assignment_stats(session, a) for a in items]
 
@@ -266,8 +268,17 @@ async def student_assignments(user: User = StudentUser, session: AsyncSession = 
     return [StudentAssignmentOut(
         id=a.id, title=a.title, description=a.description, criteria=a.criteria, due_at=a.due_at,
         file_name=a.file_name, group_name=g, lesson_title=lt, status=_student_status(a, subs.get(a.id)),
-        submission=my_submission_out(subs[a.id]) if a.id in subs else None,
+        submission=my_submission_out(subs[a.id]) if a.id in subs else None, **_code_fields(a),
     ) for a, g, lt in rows]
+
+
+def _code_fields(a: Assignment) -> dict:
+    cases = a.test_cases or []
+    return {
+        "kind": a.kind or "text", "language": a.language, "starter_code": a.starter_code, "expected": a.expected,
+        "examples": [{"input": c.get("input", ""), "output": c.get("output", "")} for c in cases if not c.get("hidden")],
+        "hidden_tests": sum(1 for c in cases if c.get("hidden")),
+    }
 
 
 def _prepare_image(data: bytes) -> bytes:
@@ -326,6 +337,16 @@ async def submit(assignment_id: int, text: str | None = Form(default=None), is_c
         new_files.append(SubmissionFile(storage_key=key, content_type="image/jpeg", size_bytes=len(data)))
     sub.files = new_files
     sub.text, sub.is_code = text or None, is_code
+    sub.language, sub.test_results, sub.tests_passed, sub.tests_total = None, [], None, None
+    if a.kind == "code":
+        sub.is_code, sub.language = True, a.language
+        if a.language in code_runner.LANGUAGES and a.test_cases and text:
+            try:
+                results = await code_runner.run_tests(a.language, text, a.test_cases, include_hidden=True)
+                sub.test_results = results
+                sub.tests_passed, sub.tests_total = sum(r["passed"] for r in results), len(results)
+            except code_runner.RunError:
+                pass  # ishga tushirish xizmati ishlamasa ham javob qabul qilinadi — mentor ko'radi
     sub.submitted_at, sub.late, sub.attempt = now(), now() > a.due_at, sub.attempt + 1
     sub.ai_status = SubmissionStatus.pending if ai_grader.enabled() else SubmissionStatus.manual
     sub.ai_score = sub.ai_feedback = sub.ai_details = sub.ai_error = None
@@ -336,8 +357,26 @@ async def submit(assignment_id: int, text: str | None = Form(default=None), is_c
     return StudentAssignmentOut(
         id=a.id, title=a.title, description=a.description, criteria=a.criteria, due_at=a.due_at,
         file_name=a.file_name, group_name=group_name, lesson_title=lesson_title, status="submitted",
-        submission=my_submission_out(sub),
+        submission=my_submission_out(sub), **_code_fields(a),
     )
+
+
+@router.post("/student/assignments/{assignment_id}/check")
+async def check_code(assignment_id: int, data: CheckIn, user: User = StudentUser,
+                     session: AsyncSession = Depends(get_session)):
+    """Kodni ochiq misollar bo'yicha sinash (topshirishdan oldin)."""
+    a = await session.get(Assignment, assignment_id)
+    member = a and await session.scalar(select(GroupStudent.student_id).where(
+        GroupStudent.group_id == a.group_id, GroupStudent.student_id == user.id))
+    if not a or not member or a.kind != "code":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Vazifa topilmadi")
+    try:
+        code_runner.check_rate(user.id)
+        results = await code_runner.run_tests(a.language, data.code, a.test_cases or [], include_hidden=False)
+    except code_runner.RunError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    return {"results": results, "passed": sum(r["passed"] for r in results), "total": len(results),
+            "hidden": sum(1 for c in (a.test_cases or []) if c.get("hidden"))}
 
 
 # =================== Ota-ona ===================
@@ -363,10 +402,8 @@ async def child_homework(child_id: int, user: User = ParentUser, session: AsyncS
 # =================== Fayllar ===================
 
 async def _can_see_student(session: AsyncSession, user: User, student_id: int, group_id: int) -> bool:
-    if user.role in (Role.admin, Role.superadmin):
-        return True
-    if user.role == Role.mentor:
-        return await session.scalar(select(Group.mentor_id).where(Group.id == group_id)) == user.id
+    if user.role in STAFF_ROLES or user.role == Role.mentor:
+        return await can_access_group(session, user, group_id)
     if user.role == Role.student:
         return user.id == student_id
     if user.role == Role.parent:

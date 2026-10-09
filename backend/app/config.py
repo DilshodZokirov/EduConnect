@@ -37,12 +37,27 @@ class Settings(BaseSettings):
     s3_public_base: str = "/storage"
     max_file_mb: int = 100
     max_video_mb: int = 2048
+    # Ekrandan yozilgan dars videolari shuncha kundan keyin avtomatik o'chiriladi
+    recording_retention_days: int = 7
+    max_recording_minutes: int = 240
+
+    # Web App manzili (bot ham shu qiymatni ishlatadi): bot xabaridagi tugmalar va brauzer havolalari uchun
+    webapp_url: str = ""
+    # Guruh havolasi bosilganda ilova darhol ochilsin (t.me/<bot>?startapp=...). BotFather'da Mini App yoqilgan bo'lishi kerak.
+    # false bo'lsa — eski usul: avval bot xabari, keyin «Guruhga qo'shilish» tugmasi.
+    invite_open_app: bool = True
+    login_code_ttl_minutes: int = 10
 
     # AI (uy vazifasini tekshirish). Kalit bo'lmasa — vazifalarni mentor o'zi baholaydi.
     anthropic_api_key: str = ""
     ai_model: str = "claude-haiku-4-5-20251001"  # tez va arzon; sifat yetmasa kuchliroq modelga almashtiring
     homework_max_images: int = 5
     homework_max_image_mb: int = 10
+
+    # Kodni ishga tushirish (Piston). Bo'sh bo'lsa — "Run" o'chiq.
+    piston_url: str = "http://piston:2000"
+    code_run_timeout_ms: int = 5000
+    code_runs_per_minute: int = 20
 
     # To'lovlar
     timezone: str = "Asia/Tashkent"

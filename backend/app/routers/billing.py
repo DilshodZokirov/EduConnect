@@ -11,6 +11,7 @@ from app.models import Group, GroupStudent, Invoice, Payment, User
 from app.schemas import (
     InvoiceDiscountOut, InvoiceOut, InvoiceUpdateIn, PaymentIn, PaymentOut, PrepayIn, UserShort,
 )
+from app.scope import branch_ids, in_scope
 from app.services import billing, notify
 
 router = APIRouter(prefix="/admin/invoices", tags=["To'lovlar"])
@@ -38,6 +39,14 @@ async def _invoice(session: AsyncSession, invoice_id: int) -> tuple[Invoice, Use
     return row
 
 
+async def _scoped_invoice(session: AsyncSession, admin: User, invoice_id: int):
+    inv, student, group_name = await _invoice(session, invoice_id)
+    branch = await session.scalar(select(Group.branch_id).where(Group.id == inv.group_id))
+    if not in_scope(await branch_ids(session, admin), branch):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "To'lov topilmadi")
+    return inv, student, group_name
+
+
 @router.get("", response_model=list[InvoiceOut])
 async def list_invoices(
     period: date | None = Query(default=None, description="Oyning istalgan sanasi, masalan 2026-10-01"),
@@ -52,6 +61,9 @@ async def list_invoices(
             .order_by(Group.name, User.last_name, User.first_name))
     if group_id:
         stmt = stmt.where(Invoice.group_id == group_id)
+    scope = await branch_ids(session, admin)
+    if scope is not None:
+        stmt = stmt.where(Group.branch_id.in_(scope or {-1}))
     rows = list(await session.execute(stmt))
     with_payer = await billing.students_with_payer(session, list({u.id for _, u, _ in rows}))
     result = [to_out(i, u, g, payer_missing=u.id not in with_payer) for i, u, g in rows]
@@ -75,7 +87,7 @@ async def prepay(data: PrepayIn, bg: BackgroundTasks, admin: User = AdminUser, s
     group = await session.get(Group, data.group_id)
     member = await session.scalar(select(GroupStudent.student_id).where(
         GroupStudent.group_id == data.group_id, GroupStudent.student_id == data.student_id))
-    if group is None or member is None:
+    if group is None or member is None or not in_scope(await branch_ids(session, admin), group.branch_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "O'quvchi bu guruhda emas")
     if not group.price:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Guruhga oylik narx qo'yilmagan")
@@ -96,7 +108,7 @@ async def prepay(data: PrepayIn, bg: BackgroundTasks, admin: User = AdminUser, s
 @router.post("/{invoice_id}/payments", response_model=InvoiceOut)
 async def add_payment(invoice_id: int, data: PaymentIn, bg: BackgroundTasks,
                       admin: User = AdminUser, session: AsyncSession = Depends(get_session)):
-    inv, student, group_name = await _invoice(session, invoice_id)
+    inv, student, group_name = await _scoped_invoice(session, admin, invoice_id)
     remaining = inv.amount - inv.paid_amount
     if remaining <= 0:
         raise HTTPException(status.HTTP_409_CONFLICT, "Bu oy uchun to'lov to'liq qilingan")
@@ -111,7 +123,7 @@ async def add_payment(invoice_id: int, data: PaymentIn, bg: BackgroundTasks,
 
 @router.get("/{invoice_id}/payments", response_model=list[PaymentOut])
 async def list_payments(invoice_id: int, admin: User = AdminUser, session: AsyncSession = Depends(get_session)):
-    await _invoice(session, invoice_id)
+    await _scoped_invoice(session, admin, invoice_id)
     return list(await session.scalars(select(Payment).where(Payment.invoice_id == invoice_id).order_by(Payment.created_at)))
 
 
@@ -120,7 +132,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdateIn, admin: User = A
                          session: AsyncSession = Depends(get_session)):
     """Summani o'zgartirish (chegirma, bekor qilingan dars) yoki muhlat berish (yangi oxirgi muddat).
     Sababi izohga yoziladi va ota-onaga ham ko'rinadi."""
-    inv, student, group_name = await _invoice(session, invoice_id)
+    inv, student, group_name = await _scoped_invoice(session, admin, invoice_id)
     if data.amount is None and data.due_date is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Summa yoki muddatdan birini o'zgartiring")
     if data.amount is not None:

@@ -8,6 +8,7 @@ import {
   Button, Card, Content, ErrorBox, Header, Loading, Pill, useTelegramBack,
 } from '../../components/ui.jsx';
 import { AnswerText, CriteriaList, ScorePill, SubmissionImages, TaskFileButton } from './shared.jsx';
+import CodeTask from './CodeTask.jsx';
 
 const MAX_IMAGES = 5;
 
@@ -141,8 +142,11 @@ export default function StudentDetail() {
           <h3 className="item-title">Baholash mezonlari</h3>
           <p className="pre-wrap muted small">{a.criteria}</p>
         </Card>
+        {a.kind === 'code' && (
+          <CodeTask assignment={a} onSubmitted={(u) => setData((list) => list.map((x) => (x.id === u.id ? u : x)))} />
+        )}
         {a.submission && <Result sub={a.submission} />}
-        {canSubmit && (
+        {canSubmit && a.kind !== 'code' && (
           <SubmitForm assignment={a}
             onSubmitted={(u) => setData((list) => list.map((x) => (x.id === u.id ? u : x)))} />
         )}

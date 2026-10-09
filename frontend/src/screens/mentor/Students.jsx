@@ -3,7 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { initials } from '../../api.js';
 import { useApi } from '../../hooks.jsx';
 import Icon from '../../components/Icon.jsx';
-import { Avatar, Card, Content, EmptyState, ErrorBox, Header, Loading, Pill, useTelegramBack } from '../../components/ui.jsx';
+import { Avatar, Button, Card, Content, EmptyState, ErrorBox, Header, Loading, Pill, useTelegramBack } from '../../components/ui.jsx';
+import ParentRequests from './ParentRequests.jsx';
 
 export default function Students() {
   const { gid } = useParams();
@@ -16,12 +17,16 @@ export default function Students() {
     <>
       <Header title="O'quvchilar" onBack={back} />
       <Content>
+        <ParentRequests groupId={gid} onChanged={reload} />
         {loading && !data && <Loading />}
         {error && <ErrorBox text={error} onRetry={reload} />}
-        {data?.length === 0 && <EmptyState icon="users" title="Guruhda o'quvchi yo'q" text="O'quvchilarni admin guruhga qo'shadi." />}
+        {data?.length === 0 && (
+          <EmptyState icon="users" title="Guruhda o'quvchi yo'q" text="Guruh havolasini o'quvchilarga yuboring — ular o'zi qo'shiladi."
+            action={<Button onClick={() => navigate(`/g/${gid}/invite`)}>Havolani ochish</Button>} />
+        )}
         {data?.length > 0 && (
           <>
-            <p className="muted small">O'quvchini bosib, unga ota-onasini bog'lang.</p>
+            <p className="muted small">O'quvchini bosing: ota-onasini bog'lash, rolni tuzatish yoki guruhdan chiqarish.</p>
             <Card className="card-flush">
               {data.map((s) => (
                 <button key={s.id} type="button" className="list-row list-row-btn" onClick={() => navigate(`/g/${gid}/students/${s.id}`)}>

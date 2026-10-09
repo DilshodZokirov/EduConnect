@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../api.js';
+import { api, isManager } from '../../api.js';
+import { useAuth } from '../../auth.jsx';
 import { useApi, useToast } from '../../hooks.jsx';
 import {
   BottomBar, Button, Card, Content, ErrorBox, Field, Header, Loading, MoneyField, Pill, Select, useTelegramBack,
@@ -14,8 +15,13 @@ export default function GroupCreate() {
   const back = useCallback(() => navigate('/groups'), [navigate]);
   useTelegramBack(back);
 
-  const mentors = useApi('/admin/users?role=mentor&status=active&limit=200');
-  const students = useApi('/admin/users?role=student&status=active&limit=200');
+  const { user } = useAuth();
+  const branches = useApi(isManager(user.role) ? '/admin/branches' : null);
+  const activeBranches = (branches.data ?? []).filter((b) => b.is_active);
+  const [branchId, setBranchId] = useState('');
+  const branchQuery = branchId ? `&branch_id=${branchId}` : '';
+  const mentors = useApi(`/admin/users?role=mentor&status=active&limit=200${branchQuery}`);
+  const students = useApi(`/admin/users?role=student&status=active&limit=200${branchQuery}`);
 
   const [name, setName] = useState('');
   const [mentorId, setMentorId] = useState('');
@@ -34,6 +40,7 @@ export default function GroupCreate() {
         method: 'POST',
         body: {
           name: name.trim(), mentor_id: mentorId ? Number(mentorId) : null,
+          branch_id: branchId ? Number(branchId) : null,
           schedule: formatSchedule(schedule), price: price || null,
         },
       });
@@ -54,6 +61,12 @@ export default function GroupCreate() {
       <Content>
         <Field label="Guruh nomi" placeholder="Masalan: Frontend-12" value={name}
           onChange={(e) => setName(e.target.value)} />
+        {activeBranches.length > 0 && (
+          <Select label="Filial" value={branchId} onChange={(e) => { setBranchId(e.target.value); setMentorId(''); setPicked([]); }}>
+            <option value="">Filialni tanlang</option>
+            {activeBranches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </Select>
+        )}
         <Select label="Mentor" value={mentorId} onChange={(e) => setMentorId(e.target.value)}>
           <option value="">Keyinroq tanlayman</option>
           {mentors.data?.map((m) => <option key={m.id} value={m.id}>{m.first_name} {m.last_name}</option>)}

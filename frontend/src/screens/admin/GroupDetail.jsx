@@ -11,7 +11,7 @@ import StudentPicker from './StudentPicker.jsx';
 
 function Settings({ group, onSaved }) {
   const toast = useToast();
-  const mentors = useApi('/admin/users?role=mentor&status=active&limit=200');
+  const mentors = useApi(`/admin/users?role=mentor&status=active&limit=200${group.branch_id ? `&branch_id=${group.branch_id}` : ''}`);
   const [mentorId, setMentorId] = useState(group.mentor?.id ? String(group.mentor.id) : '');
   const [schedule, setSchedule] = useState(parseSchedule(group.schedule ?? ''));
   const [price, setPrice] = useState(group.price ?? 0);
@@ -47,9 +47,9 @@ function Settings({ group, onSaved }) {
   );
 }
 
-function AddStudents({ groupId, existing, onAdded, onCancel }) {
+function AddStudents({ groupId, branchId, existing, onAdded, onCancel }) {
   const toast = useToast();
-  const students = useApi('/admin/users?role=student&status=active&limit=200');
+  const students = useApi(`/admin/users?role=student&status=active&limit=200${branchId ? `&branch_id=${branchId}` : ''}`);
   const [picked, setPicked] = useState([]);
   const [busy, setBusy] = useState(false);
 
@@ -95,18 +95,6 @@ export default function GroupDetail() {
 
   useEffect(() => { setAdding(false); }, [id]);
 
-  async function remove(s) {
-    if (!(await confirmDialog(`${s.first_name} ${s.last_name} guruhdan chiqarilsinmi?`))) return;
-    try {
-      await api(`/admin/groups/${id}/students/${s.id}`, { method: 'DELETE' });
-      toast("O'quvchi guruhdan chiqarildi");
-      students.setData((list) => list.filter((x) => x.id !== s.id));
-      groups.reload();
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  }
-
   if (groups.loading && !groups.data) return <><Header title="Guruh" onBack={back} /><Loading /></>;
   if (!group) {
     return (
@@ -128,6 +116,7 @@ export default function GroupDetail() {
           </p>
           <p className="hero-sub">{group.schedule || 'Jadval belgilanmagan'} · {group.student_count} o'quvchi</p>
           <p className="hero-sub">{group.price ? `Oylik narx: ${money(group.price)} so'm` : 'Narx belgilanmagan'}</p>
+          {group.branch_name && <p className="hero-sub">Filial: {group.branch_name}</p>}
           <button type="button" className="hero-btn" onClick={() => setEditing((v) => !v)}>
             {editing ? 'Yopish' : 'Tahrirlash'}
           </button>
@@ -141,7 +130,7 @@ export default function GroupDetail() {
         </div>
 
         {adding && (
-          <AddStudents groupId={id} existing={(students.data ?? []).map((s) => s.id)}
+          <AddStudents groupId={id} branchId={group.branch_id} existing={(students.data ?? []).map((s) => s.id)}
             onCancel={() => setAdding(false)}
             onAdded={() => { setAdding(false); students.reload(); groups.reload(); }} />
         )}
@@ -161,10 +150,6 @@ export default function GroupDetail() {
                   <b>{s.first_name} {s.last_name}</b>
                   <p className="muted small">Bog'langan ota-ona: {s.confirmed_parents}</p>
                 </div>
-                <button type="button" className="icon-btn icon-btn-danger" aria-label="Guruhdan chiqarish"
-                  title="Guruhdan chiqarish" onClick={() => remove(s)}>
-                  <Icon name="trash" size={20} />
-                </button>
               </div>
             ))}
           </Card>

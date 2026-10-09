@@ -5,6 +5,8 @@ import { useAuth } from '../../auth.jsx';
 import { confirmDialog, useApi, useToast } from '../../hooks.jsx';
 import Icon from '../../components/Icon.jsx';
 import { Avatar, Card, Content, Header, Pill } from '../../components/ui.jsx';
+import { toggleTheme, useTheme } from '../../theme.js';
+import ProfileSwitcher from '../../components/ProfileSwitcher.jsx';
 
 function SettingRow({ icon, title, sub, right, onClick, danger }) {
   return (
@@ -19,6 +21,7 @@ function SettingRow({ icon, title, sub, right, onClick, danger }) {
 
 export default function Profile() {
   const navigate = useNavigate();
+  const theme = useTheme();
   const toast = useToast();
   const { user, applySession } = useAuth();
   const phoneReq = useApi('/me/phone');
@@ -54,6 +57,16 @@ export default function Profile() {
           <button type="button" className="btn btn-outline btn-icon" onClick={() => navigate('/profile/edit')}>
             <Icon name="edit" size={18} />Profilni tahrirlash
           </button>
+        </Card>
+
+        <ProfileSwitcher />
+
+        <Card className="card-flush">
+          <h3 className="card-title">Sozlamalar</h3>
+          <SettingRow icon="bell" title="Xabar sozlamalari" sub="Telegram'ga qaysi xabarlar kelsin"
+            onClick={() => navigate('/profile/notifications')} />
+          <SettingRow icon={theme === 'dark' ? 'sun' : 'moon'} title={theme === 'dark' ? 'Kunduzgi rejim' : 'Tungi rejim'}
+            sub="Tepadagi ☀️ / 🌙 tugmasi bilan ham almashtiriladi" onClick={toggleTheme} />
         </Card>
 
         <Card className="card-flush">

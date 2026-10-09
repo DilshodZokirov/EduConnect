@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { formatDate } from '../../dates.js';
 import { useApi, useToast } from '../../hooks.jsx';
-import { formatDuration, formatSize, openMaterial, sendToTelegram } from '../../materials.js';
+import { expiryLabel, formatDuration, formatSize, openMaterial, sendToTelegram } from '../../materials.js';
 import Icon from '../../components/Icon.jsx';
 import VideoPlayer from '../../components/VideoPlayer.jsx';
 import { Card, Content, ErrorBox, Header, Loading, Pill, useTelegramBack } from '../../components/ui.jsx';
@@ -17,7 +17,7 @@ function Material({ m, track, percent, open, onToggle }) {
 
   const icon = { video: 'video', link: 'globe' }[m.kind] ?? 'file';
   const sub = m.kind === 'video'
-    ? [formatDuration(m.duration_seconds), percent !== undefined ? `${percent}% ko'rilgan` : ''].filter(Boolean).join(' · ')
+    ? [formatDuration(m.duration_seconds), percent !== undefined ? `${percent}% ko'rilgan` : '', expiryLabel(m)].filter(Boolean).join(' · ')
     : m.kind === 'link' ? 'Havola' : formatSize(m.size_bytes);
 
   return (

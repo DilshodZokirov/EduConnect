@@ -8,13 +8,13 @@ log = logging.getLogger("telegram")
 _http = httpx.AsyncClient(timeout=10)
 
 
-async def send_message(chat_id: int, text: str) -> bool:
+async def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> bool:
     """Bot nomidan xabar yuboradi (foydalanuvchi botni bloklagan bo'lsa False)."""
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
-        resp = await _http.post(
-            f"https://api.telegram.org/bot{settings.bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-        )
+        resp = await _http.post(f"https://api.telegram.org/bot{settings.bot_token}/sendMessage", json=payload)
         if resp.status_code != 200:
             log.warning("Telegram %s: %s", resp.status_code, resp.text[:200])
             return False
@@ -54,3 +54,18 @@ async def send_document(chat_id: int, file_id: str, caption: str = "") -> None:
     data = resp.json()
     if not data.get("ok"):
         raise TelegramError(data.get("description") or f"Telegram {resp.status_code}")
+
+
+_bot_username: str | None = None
+
+
+async def bot_username() -> str | None:
+    """Botning @username'i (havolalar uchun) — bir marta so'raladi."""
+    global _bot_username
+    if _bot_username is None:
+        try:
+            resp = await _http.get(f"https://api.telegram.org/bot{settings.bot_token}/getMe")
+            _bot_username = resp.json()["result"]["username"]
+        except Exception:  # noqa: BLE001
+            return None
+    return _bot_username

@@ -1,0 +1,25 @@
+# Maxfiy sozlamalar — hech qachon GitHub'ga yuklanmasin
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+dist/
+
+# Tizim va muharrir fayllari
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Zaxira va katta fayllar
+*.vhdx
+*.zip
+*.log

@@ -11,7 +11,7 @@ from app.schemas import LessonOut, VideoProgressOut
 
 router = APIRouter(prefix="/learn", tags=["O'quv"])
 
-STAFF = (Role.mentor, Role.admin, Role.superadmin)
+STAFF = (Role.mentor, Role.admin, Role.regional_manager, Role.general_manager, Role.superadmin)
 
 
 @router.get("/groups/{group_id}/lessons", response_model=list[LessonOut])
@@ -39,7 +39,7 @@ async def video_progress(student_id: int, user: User = Depends(get_current_user)
     """O'quvchi videolarni necha foiz ko'rgani. O'quvchining o'zi, tasdiqlangan ota-onasi yoki admin ko'radi."""
     allowed = user.status == UserStatus.active and (
         (user.role == Role.student and user.id == student_id)
-        or user.role in (Role.admin, Role.superadmin)
+        or user.role in (Role.admin, Role.regional_manager, Role.general_manager, Role.superadmin)
         or (user.role == Role.parent and await session.scalar(
             select(ParentLink.id).where(
                 ParentLink.parent_id == user.id, ParentLink.student_id == student_id,

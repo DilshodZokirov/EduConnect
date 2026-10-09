@@ -1,4 +1,5 @@
 import math
+from datetime import datetime, timedelta, timezone
 import mimetypes
 import uuid
 from pathlib import Path
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.deps import MentorUser
 from app.models import (
-    Attendance, AttendanceStatus, Group, GroupStudent, Lesson, LessonMaterial, LinkStatus, MaterialKind,
+    Attendance, AttendanceStatus, Group, GroupStudent, Lesson, LessonMaterial, LinkStatus, MaterialKind, MaterialSource,
     MaterialStatus, ParentLink, Role, User, UserStatus, VideoView,
 )
 from app.schemas import (
@@ -21,6 +22,8 @@ from app.schemas import (
 from app.security import mask_phone
 from app.services import notify
 from app.config import settings
+from app.models import STAFF_ROLES
+from app.scope import branch_ids, in_scope
 from app.services import storage
 
 MB = 1024 * 1024
@@ -30,12 +33,17 @@ router = APIRouter(prefix="/mentor", tags=["Mentor"])
 
 
 def _is_admin(user: User) -> bool:
-    return user.role in (Role.admin, Role.superadmin)
+    return user.role in STAFF_ROLES
 
 
 async def _own_group(session: AsyncSession, user: User, group_id: int) -> Group:
     group = await session.get(Group, group_id)
-    if group is None or (not _is_admin(user) and group.mentor_id != user.id):
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Guruh topilmadi")
+    if _is_admin(user):
+        if not in_scope(await branch_ids(session, user), group.branch_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Guruh topilmadi")
+    elif group.mentor_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Guruh topilmadi")
     return group
 
@@ -265,6 +273,8 @@ async def complete_video_upload(material_id: int, data: VideoCompleteIn, user: U
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Yuklashni yakunlab bo'lmadi: {exc}")
     material.upload_id = None
     material.status = MaterialStatus.processing  # worker navbatga oladi
+    if material.source == MaterialSource.recording:
+        material.expires_at = datetime.now(timezone.utc) + timedelta(days=settings.recording_retention_days)
     await session.commit()
     return material
 
@@ -400,6 +410,18 @@ async def link_parent(student_id: int, data: LinkParentIn, bg: BackgroundTasks,
 
     bg.add_task(notify.parent_link_created, link.id)
     return await _link_out(session, link)
+
+
+@router.delete("/students/{student_id}/parents/{link_id}", status_code=204)
+async def unlink_parent(student_id: int, link_id: int, user: User = MentorUser,
+                        session: AsyncSession = Depends(get_session)):
+    """O'qituvchi ota-onaning farzand bilan bog'lanishini bekor qiladi (masalan, adashib bog'langan bo'lsa)."""
+    await _check_teaches(session, user, student_id)
+    link = await session.get(ParentLink, link_id)
+    if link is None or link.student_id != student_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bog'lanish topilmadi")
+    await session.delete(link)
+    await session.commit()
 
 
 @router.post("/students/{student_id}/self-guardian", status_code=204)

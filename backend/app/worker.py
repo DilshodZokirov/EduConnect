@@ -12,14 +12,19 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from zoneinfo import ZoneInfo
+
 from sqlalchemy import select, update
+
+from app.config import settings
 
 from app.db import SessionLocal
 from app.models import (
-    Assignment, Submission, SubmissionStatus, Invoice, GroupStudent, Lesson, LessonMaterial, LinkStatus, MaterialKind, MaterialStatus, ParentLink, User,
+    Test, TestAttempt,
+    Assignment, Submission, SubmissionStatus, Invoice, GroupStudent, Lesson, LessonMaterial, LinkStatus, MaterialKind, MaterialSource, MaterialStatus, ParentLink, User,
 )
-from app.services import ai_grader, billing, notify, storage
-from app.services.telegram import send_message
+from app.services import ai_grader, billing, notify, rating, storage, testing
+from app.services.inbox import deliver
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("worker")
@@ -29,6 +34,7 @@ VIDEO_FILTER = "fps=15,mpdecimate,scale='min(1920,trunc(iw/2)*2)':-2"
 FFMPEG_VIDEO = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p", "-fps_mode", "vfr"]
 FFMPEG_AUDIO = ["-af", "loudnorm", "-c:a", "aac", "-b:a", "64k", "-ac", "1"]
 STALE_UPLOAD_HOURS = 24
+MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avgust", "sentabr", "oktabr", "noyabr", "dekabr"]
 
 
 async def run(*args: str) -> tuple[int, str, str]:
@@ -75,15 +81,26 @@ async def notify_ready(material_id: int) -> None:
         students = list(await session.scalars(
             select(User).join(GroupStudent, GroupStudent.student_id == User.id).where(GroupStudent.group_id == lesson.group_id)
         ))
-        parents = list(await session.scalars(
-            select(User).join(ParentLink, ParentLink.parent_id == User.id).where(
+        parent_rows = (await session.execute(
+            select(User, ParentLink.student_id).join(ParentLink, ParentLink.parent_id == User.id).where(
                 ParentLink.student_id.in_([s.id for s in students] or [0]),
                 ParentLink.status == LinkStatus.confirmed,
-            ).distinct()
-        ))
+            )
+        )).all()
     text = f"📹 «{lesson.title}» darsining videosi tayyor. EduConnect ilovasida ko'rishingiz mumkin."
-    for person in {u.id: u for u in students + parents}.values():
-        await send_message(person.telegram_id, text)
+    if material.source == MaterialSource.recording and material.expires_at:
+        until = material.expires_at.astimezone(ZoneInfo(settings.timezone))
+        text = (f"📹 «{lesson.title}» darsining yozuvi tayyor. EduConnect ilovasida "
+                f"{until.day}-{MONTHS[until.month - 1]}gacha ko'rishingiz mumkin.")
+    gid, lid = lesson.group_id, lesson.id
+    for st in students:
+        await deliver(st, text, kind="video", link=f"/lessons/{gid}/{lid}")
+    sent = {s.id for s in students}
+    for parent, child_id in parent_rows:
+        if parent.id in sent:
+            continue
+        sent.add(parent.id)
+        await deliver(parent, text, kind="video", link=f"/child/{child_id}/g/{gid}/l/{lid}")
 
 
 async def process(material_id: int) -> None:
@@ -107,6 +124,9 @@ async def process(material_id: int) -> None:
         code, _, err = await run(*args)
         if code != 0:
             raise RuntimeError(f"ffmpeg xatosi: {err[-500:]}")
+
+        if not duration:  # brauzerda yozilgan webm faylda davomiylik ko'pincha yozilmaydi
+            _, _, duration = await probe(dst)
 
         new_key = f"videos/{material_id}/video.mp4"
         await storage.upload_file(dst, new_key, "video/mp4")
@@ -153,6 +173,27 @@ async def cleanup_stale_uploads() -> None:
             log.info("%d ta tugallanmagan yuklash o'chirildi", len(stale))
 
 
+async def cleanup_expired_recordings() -> None:
+    """Ekrandan yozilgan, saqlash muddati (7 kun) tugagan videolarni ombordan va bazadan o'chiradi."""
+    now = datetime.now(timezone.utc)
+    async with SessionLocal() as session:
+        expired = list(await session.scalars(
+            select(LessonMaterial).where(
+                LessonMaterial.source == MaterialSource.recording,
+                LessonMaterial.expires_at.is_not(None),
+                LessonMaterial.expires_at < now,
+                LessonMaterial.status != MaterialStatus.encoding,
+            )
+        ))
+        for material in expired:
+            if material.storage_key:
+                await storage.delete(material.storage_key)
+            await session.delete(material)
+        await session.commit()
+        if expired:
+            log.info("%d ta muddati o'tgan dars yozuvi o'chirildi", len(expired))
+
+
 async def claim_submission() -> int | None:
     async with SessionLocal() as session:
         sid = await session.scalar(
@@ -175,8 +216,17 @@ async def check_submission(submission_id: int) -> None:
         a = await session.get(Assignment, sub.assignment_id)
         images = [await storage.get_bytes(f.storage_key) for f in sub.files]
         try:
+            summary = None
+            if sub.tests_total:
+                failed = [r for r in sub.test_results if not r.get("passed")]
+                summary = f"{sub.tests_passed}/{sub.tests_total} ta misol o'tdi" + (
+                    "; o'tmaganlar: " + "; ".join(
+                        (f"kirish={r['input']!r}, kutilgan={r['expected']!r}, chiqdi={r['got']!r}" if not r.get("hidden")
+                         else "yashirin misol") + (f" ({r['error']})" if r.get("error") else "")
+                        for r in failed[:5]) if failed else "")
             result = await ai_grader.grade(title=a.title, description=a.description, criteria=a.criteria,
-                                           answer_text=sub.text, is_code=sub.is_code, images=images)
+                                           answer_text=sub.text, is_code=sub.is_code, images=images,
+                                           tests_summary=summary)
         except Exception as exc:  # noqa: BLE001
             log.warning("Javob %s AI tekshiruvida xato: %s", submission_id, exc)
             sub.ai_status, sub.ai_error = SubmissionStatus.failed, str(exc)[:1000]
@@ -192,6 +242,79 @@ async def check_submission(submission_id: int) -> None:
         sub.ai_status = SubmissionStatus.done if result["confident"] else SubmissionStatus.review
         await session.commit()
     log.info("Javob %s tekshirildi: %s ball", submission_id, result["score"])
+
+
+async def test_tasks() -> None:
+    """Test ochilganda xabar, vaqti o'tgan urinishlarni yakunlash, qisqa javoblarni AI tekshiruvi."""
+    now = datetime.now(timezone.utc)
+    async with SessionLocal() as session:
+        opened = list(await session.scalars(select(Test).where(
+            Test.notified.is_(False), Test.opens_at <= now, Test.closes_at > now)))
+        for t in opened:
+            t.notified = True
+        expired = list(await session.scalars(select(TestAttempt).where(
+            TestAttempt.finished_at.is_(None), TestAttempt.deadline_at < now - timedelta(seconds=30))))
+        for a in expired:
+            testing.finish(await session.get(Test, a.test_id), a, "timeout")
+        await session.commit()
+    for t in opened:
+        await notify.test_opened(t.id)
+
+    async with SessionLocal() as session:
+        pending = list(await session.scalars(select(TestAttempt).where(
+            TestAttempt.ai_pending.is_(True), TestAttempt.finished_at.is_not(None)).limit(20)))
+        for a in pending:
+            t = await session.get(Test, a.test_id)
+            items = [{"id": str(q.id), "question": q.text, "accepted": q.correct,
+                      "answer": a.answers.get(str(q.id), "")}
+                     for q in t.questions if a.results.get(str(q.id), {}).get("correct") is None]
+            try:
+                verdicts = await ai_grader.check_short_answers(items) if ai_grader.enabled() and items else [False] * len(items)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Test urinishi %s: AI xatosi %s — qisqa javoblar noto'g'ri deb olinadi", a.id, exc)
+                verdicts = [False] * len(items)
+            results = dict(a.results)
+            for it, ok in zip(items, verdicts):
+                r = dict(results[it["id"]])
+                r["correct"], r["earned"] = ok, r["max"] if ok else 0
+                results[it["id"]] = r
+            a.results = results
+            testing.recalc_score(a)
+            a.ai_pending = False
+        await session.commit()
+
+
+async def rating_tasks() -> None:
+    """Oyning 1–3-kunlari: o'tgan oy reytingida 1–3-o'rin olganlarga bir martalik tabrik."""
+    from app.models import Group, RatingAward  # noqa: PLC0415
+    now = datetime.now(timezone.utc).astimezone(rating.tz())
+    if now.day > 3 or not 10 <= now.hour < 20:
+        return
+    start, end = rating.period_bounds("month", -1, now.date())
+    created = []
+    async with SessionLocal() as session:
+        groups = list(await session.scalars(select(Group).where(Group.is_active.is_(True))))
+        for g in groups:
+            done = await session.scalar(select(RatingAward.id).where(
+                RatingAward.group_id == g.id, RatingAward.period_start == start).limit(1))
+            if done:
+                continue
+            r = await rating.compute(session, g.id, start, end)
+            if r["max_points"] == 0:
+                continue
+            for u in r["students"]:
+                place, pts = r["ranks"][u.id], r["totals"][u.id]
+                if place > 3 or pts <= 0:
+                    continue
+                aw = RatingAward(group_id=g.id, student_id=u.id, period_start=start, place=place, points=pts)
+                session.add(aw)
+                await session.flush()
+                created.append(aw.id)
+        await session.commit()
+    for award_id in created:
+        await notify.rating_award(award_id)
+    if created:
+        log.info("Oylik reyting: %d ta tabrik yuborildi", len(created))
 
 
 async def homework_tasks() -> None:
@@ -259,6 +382,7 @@ async def main() -> None:
     log.info("Ishchi ishga tushdi")
     last_cleanup = 0.0
     last_billing = 0.0
+    last_tests = 0.0
     while True:
         if time.monotonic() - last_billing > 600:
             try:
@@ -269,7 +393,17 @@ async def main() -> None:
                 await homework_tasks()
             except Exception:  # noqa: BLE001
                 log.exception("Uy vazifasi eslatmalarida xato")
+            try:
+                await rating_tasks()
+            except Exception:  # noqa: BLE001
+                log.exception("Reyting tabriklarida xato")
             last_billing = time.monotonic()
+        if time.monotonic() - last_tests > 20:  # testlar tez-tez tekshiriladi: vaqt tugashi va AI natijalari
+            try:
+                await test_tasks()
+            except Exception:  # noqa: BLE001
+                log.exception("Test vazifalarida xato")
+            last_tests = time.monotonic()
         submission_id = await claim_submission()
         if submission_id:
             await check_submission(submission_id)
@@ -280,6 +414,10 @@ async def main() -> None:
             continue
         if time.monotonic() - last_cleanup > 3600:
             await cleanup_stale_uploads()
+            try:
+                await cleanup_expired_recordings()
+            except Exception:  # noqa: BLE001
+                log.exception("Eski dars yozuvlarini o'chirishda xato")
             last_cleanup = time.monotonic()
         await asyncio.sleep(5)
 

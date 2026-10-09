@@ -109,7 +109,7 @@ export function useTelegramBack(onBack) {
 const DESKTOP_PLATFORMS = ['tdesktop', 'macos', 'weba', 'webk', 'web', 'unigram'];
 
 /** Kompyuterda ilovani to'liq ekranga kattalashtirish / kichiklashtirish tugmasi. */
-export function FullscreenToggle() {
+export function FullscreenToggle({ inline = false }) {
   const supported = !!tg && DESKTOP_PLATFORMS.includes(tg.platform) && !!tg.isVersionAtLeast?.('8.0');
   const [on, setOn] = useState(!!tg?.isFullscreen);
   const [failed, setFailed] = useState(false);
@@ -131,13 +131,13 @@ export function FullscreenToggle() {
 
   const visible = supported && !failed;
   useEffect(() => {
-    document.body.classList.toggle('has-fs-toggle', visible);
-  }, [visible]);
+    if (!inline) document.body.classList.toggle('has-fs-toggle', visible);
+  }, [visible, inline]);
 
   if (!visible) return null;
   const label = on ? 'Kichiklashtirish' : 'Kattalashtirish';
   return (
-    <button className="fs-toggle" title={label} aria-label={label}
+    <button className={inline ? 'topbar-btn' : 'fs-toggle'} title={label} aria-label={label}
       onClick={() => { try { on ? tg.exitFullscreen() : tg.requestFullscreen(); } catch { setFailed(true); } }}>
       <Icon name={on ? 'minimize' : 'maximize'} size={20} />
     </button>

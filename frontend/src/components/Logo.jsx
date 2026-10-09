@@ -1,5 +1,11 @@
-// Logotip belgisi: chat pufakchasi + bitiruv shapkasi + bildirishnoma nuqtasi
+import { useBranding } from '../branding.jsx';
+
+// Markaz logotipi (superadmin yuklagan) yoki standart EduConnect belgisi
 export default function Logo({ size = 64 }) {
+  const { logoUrl, name } = useBranding();
+  if (logoUrl) {
+    return <img src={logoUrl} alt={name} width={size} height={size} className="center-logo" style={{ borderRadius: size * 0.25 }} />;
+  }
   return (
     <svg width={size} height={size} viewBox="0 0 120 120" role="img" aria-label="EduConnect">
       <rect width="120" height="120" rx="30" fill="var(--brand)" />

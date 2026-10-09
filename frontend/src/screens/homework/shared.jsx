@@ -29,9 +29,11 @@ export function SubmissionImages({ files }) {
   );
 }
 
-export function AnswerText({ text, isCode }) {
+export function AnswerText({ text, isCode, language }) {
   if (!text) return null;
-  return isCode ? <pre className="code-block">{text}</pre> : <p className="answer-text">{text}</p>;
+  return isCode
+    ? <div className="code-wrap">{language && <span className="code-lang">{language}</span>}<pre className="code-block">{text}</pre></div>
+    : <p className="answer-text">{text}</p>;
 }
 
 export function TaskFileButton({ assignmentId, fileName }) {

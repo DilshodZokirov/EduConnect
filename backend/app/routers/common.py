@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Attendance, Group, GroupStudent, Lesson, LinkStatus, ParentLink, Role, User
+from app.models import STAFF_ROLES, Attendance, Group, GroupStudent, Lesson, LinkStatus, ParentLink, Role, User
 from app.schemas import AttendanceHistoryOut
 
 
@@ -22,8 +22,10 @@ async def attendance_history(session: AsyncSession, student_id: int, limit: int 
 
 async def can_access_group(session: AsyncSession, user: User, group_id: int) -> bool:
     """Admin, guruh mentori, guruh o'quvchisi yoki o'quvchining tasdiqlangan ota-onasi."""
-    if user.role in (Role.admin, Role.superadmin):
-        return True
+    if user.role in STAFF_ROLES:
+        from app.scope import branch_ids, in_scope  # noqa: PLC0415
+        group_branch = await session.scalar(select(Group.branch_id).where(Group.id == group_id))
+        return in_scope(await branch_ids(session, user), group_branch)
     if user.role == Role.mentor:
         return await session.scalar(select(Group.id).where(Group.id == group_id, Group.mentor_id == user.id)) is not None
     if user.role == Role.student:

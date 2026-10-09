@@ -11,7 +11,10 @@ from sqlalchemy import text
 
 from app.db import SCHEMA_PATCHES, Base, engine
 from app.services import storage
-from app.routers import admin, auth, billing, discounts, homework, learn, materials, me, mentor, parent, student
+from app.routers import (
+    admin, auth, billing, branches, code, discounts, homework, invites, learn, materials, me, mentor, parent,
+    student, tests, rating, recording, notifications, profiles, staff,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -39,7 +42,8 @@ app.add_middleware(
 )
 
 for r in (auth.router, me.router, admin.router, mentor.router, student.router, parent.router, materials.router,
-          learn.router, discounts.router, billing.router, homework.router):
+          learn.router, discounts.router, billing.router, homework.router, branches.router, branches.public,
+          tests.router, code.router, invites.router, rating.router, recording.router, notifications.router, profiles.router, staff.router):
     app.include_router(r, prefix="/api")
 
 

@@ -34,6 +34,7 @@ export default function Groups() {
               <Pill>{g.student_count} o'quvchi</Pill>
               {g.schedule && <Pill tone="grey">{g.schedule}</Pill>}
               {g.price ? <Pill tone="grey">{money(g.price)} so'm</Pill> : <Pill tone="warn">Narx yo'q</Pill>}
+              {g.branch_name && <Pill tone="grey">{g.branch_name}</Pill>}
               {!g.is_active && <Pill tone="grey">Faol emas</Pill>}
             </div>
           </button>

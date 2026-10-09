@@ -10,6 +10,8 @@ import {
 import { useChildren } from './useParentData.js';
 import { PaymentAlert } from './Payments.jsx';
 import { ChildHomeworkSummary } from '../homework/ChildHomework.jsx';
+import { ChildTestsSummary } from '../tests/ChildTests.jsx';
+import { RatingSummary } from '../rating/RatingPages.jsx';
 
 function PendingLinks({ onDecided }) {
   const toast = useToast();
@@ -70,7 +72,13 @@ function ChildDashboard({ child }) {
         {attendance.loading && !attendance.data ? <Loading /> : <AttendanceDots items={attendance.data ?? []} />}
       </Card>
 
+      {groups.data?.length > 0 && (
+        <div className="tiles">
+          <RatingSummary groupId={groups.data[0].id} studentId={child.id} to={`/child/${child.id}/rating`} />
+        </div>
+      )}
       <ChildHomeworkSummary childId={child.id} />
+      <ChildTestsSummary childId={child.id} />
 
       <h2 className="section-title">Darslar va materiallar</h2>
       {groups.loading && !groups.data && <Loading />}

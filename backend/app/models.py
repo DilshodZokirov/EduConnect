@@ -2,7 +2,7 @@ import enum
 from datetime import date, datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Integer, String, Text,
+    JSON, BigInteger, Float, Boolean, Date, DateTime, Enum, ForeignKey, Integer, String, Text,
     UniqueConstraint, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -12,7 +12,9 @@ from app.db import Base
 
 class Role(str, enum.Enum):
     superadmin = "superadmin"
-    admin = "admin"
+    general_manager = "general_manager"    # umumiy menejer — barcha filiallar
+    regional_manager = "regional_manager"  # hududiy menejer — biriktirilgan filiallar
+    admin = "admin"                        # filial admini
     mentor = "mentor"
     student = "student"
     parent = "parent"
@@ -51,6 +53,15 @@ class PhoneChangeStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 
+# Boshqaruv darajalari: kim kimni o'zgartira oladi (yuqori daraja — pastdagilarni)
+ROLE_LEVEL = {Role.superadmin: 5, Role.general_manager: 4, Role.regional_manager: 3, Role.admin: 2}
+STAFF_ROLES = tuple(ROLE_LEVEL)
+
+
+def role_level(role: "Role | None") -> int:
+    return ROLE_LEVEL.get(role, 1) if role else 0
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -59,10 +70,11 @@ class User(TimestampMixin, Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    # Bitta Telegram hisobida bir nechta profil bo'lishi mumkin (masalan, superadmin va mentor) — har biri alohida qator
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
     first_name: Mapped[str] = mapped_column(String(64))
     last_name: Mapped[str] = mapped_column(String(64))
-    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)  # bir odamning profillarida bir xil
     role: Mapped[Role | None] = mapped_column(Enum(Role, name="user_role"), nullable=True)
     status: Mapped[UserStatus] = mapped_column(
         Enum(UserStatus, name="user_status"), default=UserStatus.pending
@@ -75,6 +87,23 @@ class User(TimestampMixin, Base):
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     # Ustoz belgilaydi: o'quvchi o'zi o'ziga vasiy — to'lov xabarlari ota-onaga emas, o'ziga boradi
     self_guardian: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id", ondelete="SET NULL"), index=True)
+    # Filial admini "admin" rolini berdi — hududiy menejer tasdiqlashi kutilmoqda
+    awaiting_manager: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Qaysi guruh havolasi orqali kelgan — o'qituvchi adashib ro'yxatdan o'tganlarni topib, rolini tuzata olishi uchun
+    joined_group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"))
+    # Telegram'ga qaysi xabarlar kelsin: {"homework": false, ...}. Ilova ichidagi bildirishnomalar baribir saqlanadi.
+    notify_prefs: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    # Ro'yxatdan o'tishda kim sifatida so'radi: mentor | admin (havolasiz — xodimlar)
+    requested_role: Mapped[str | None] = mapped_column(String(20))
+    # Profillar orasida oxirgi foydalanilgani — ilova ochilganda shu profil ochiladi
+    last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    branch: Mapped["Branch | None"] = relationship(lazy="joined", foreign_keys=[branch_id])
+
+    @property
+    def branch_name(self) -> str | None:
+        return self.branch.name if self.branch else None
 
     @property
     def full_name(self) -> str:
@@ -94,8 +123,17 @@ class Group(TimestampMixin, Base):
     schedule: Mapped[str | None] = mapped_column(String(200))
     price: Mapped[int | None] = mapped_column(Integer)  # oylik narx, so'mda
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id", ondelete="SET NULL"), index=True)
+    # Guruhga taklif havolasi: bitta havola butun guruh uchun (o'quvchi va ota-onalar o'zi qo'shiladi)
+    invite_token: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
+    invite_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
-    mentor: Mapped[User | None] = relationship(lazy="joined")
+    mentor: Mapped[User | None] = relationship(lazy="joined", foreign_keys=[mentor_id])
+    branch: Mapped["Branch | None"] = relationship(lazy="joined")
+
+    @property
+    def branch_name(self) -> str | None:
+        return self.branch.name if self.branch else None
 
 
 class GroupStudent(Base):
@@ -117,6 +155,9 @@ class ParentLink(TimestampMixin, Base):
     status: Mapped[LinkStatus] = mapped_column(Enum(LinkStatus, name="link_status"), default=LinkStatus.pending)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # True — ota-ona havola orqali o'zi so'radi (o'qituvchi tasdiqlaydi);
+    # False — o'qituvchi bog'ladi (ota-ona tasdiqlaydi)
+    requested_by_parent: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
 
 class Lesson(TimestampMixin, Base):
@@ -149,6 +190,11 @@ class MaterialStatus:
     failed = "failed"
 
 
+class MaterialSource:
+    upload = "upload"        # tayyor fayl yuklangan — muddatsiz saqlanadi
+    recording = "recording"  # mentor ilovada ekrandan yozgan — 7 kundan keyin o'chiriladi
+
+
 class LessonMaterial(Base):
     __tablename__ = "lesson_materials"
 
@@ -166,6 +212,21 @@ class LessonMaterial(Base):
     error: Mapped[str | None] = mapped_column(Text)
     # Telegram'ga bir marta yuborilgan fayl nusxasi (keyingi yuborishlar tez bo'lishi uchun)
     telegram_file_id: Mapped[str | None] = mapped_column(String(300))
+    source: Mapped[str] = mapped_column(String(20), default=MaterialSource.upload, server_default=MaterialSource.upload)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # shu vaqtdan keyin o'chiriladi
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LoginCode(Base):
+    """Bir martalik kirish kodi: Telegram'dan tashqari brauzerda ochish uchun (masalan, ekranni yozish)."""
+    __tablename__ = "login_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    purpose: Mapped[str] = mapped_column(String(30))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -332,6 +393,11 @@ class Assignment(TimestampMixin, Base):
     description: Mapped[str] = mapped_column(Text)
     criteria: Mapped[str] = mapped_column(Text)   # baholash mezonlari — AI shu bo'yicha tekshiradi
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    kind: Mapped[str] = mapped_column(String(10), default="text", server_default="text")  # text | code
+    language: Mapped[str | None] = mapped_column(String(20))       # code vazifalar uchun
+    starter_code: Mapped[str | None] = mapped_column(Text)          # o'quvchiga boshlang'ich kod
+    expected: Mapped[str | None] = mapped_column(Text)              # nima chiqishi kerak (o'quvchiga ko'rinadi)
+    test_cases: Mapped[list] = mapped_column(JSON, default=list)    # [{"input","output","hidden"}]
     file_key: Mapped[str | None] = mapped_column(String(500))
     file_name: Mapped[str | None] = mapped_column(String(200))
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
@@ -358,6 +424,10 @@ class Submission(TimestampMixin, Base):
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     text: Mapped[str | None] = mapped_column(Text)
     is_code: Mapped[bool] = mapped_column(Boolean, default=False)
+    language: Mapped[str | None] = mapped_column(String(20))
+    test_results: Mapped[list] = mapped_column(JSON, default=list)  # [{"passed", "input", "expected", "got", "hidden"}]
+    tests_passed: Mapped[int | None] = mapped_column(Integer)
+    tests_total: Mapped[int | None] = mapped_column(Integer)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     late: Mapped[bool] = mapped_column(Boolean, default=False)
     attempt: Mapped[int] = mapped_column(Integer, default=1)
@@ -386,3 +456,135 @@ class SubmissionFile(Base):
     storage_key: Mapped[str] = mapped_column(String(500))
     content_type: Mapped[str] = mapped_column(String(100))
     size_bytes: Mapped[int] = mapped_column(Integer)
+
+
+class Branch(TimestampMixin, Base):
+    """Filial."""
+    __tablename__ = "branches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    address: Mapped[str | None] = mapped_column(String(300))
+    city: Mapped[str | None] = mapped_column(String(40))  # ob-havo uchun (app/services/weather.py dagi shaharlar)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class ManagerBranch(Base):
+    """Hududiy menejerga biriktirilgan filiallar."""
+    __tablename__ = "manager_branches"
+
+    manager_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), primary_key=True)
+
+
+class CenterSettings(Base):
+    """O'quv markaz brendi (bitta yozuv, id=1). Kelajakdagi ko'p markazli versiyada «markaz» jadvaliga aylanadi."""
+    __tablename__ = "center_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), default="EduConnect")
+    logo_key: Mapped[str | None] = mapped_column(String(500))
+    logo_version: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Test(TimestampMixin, Base):
+    """Test: mentor tuzadi, o'quvchi ilova ichida vaqt chegarasi bilan ishlaydi."""
+    __tablename__ = "tests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    lesson_id: Mapped[int | None] = mapped_column(ForeignKey("lessons.id", ondelete="SET NULL"))
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    time_limit_min: Mapped[int] = mapped_column(Integer)
+    opens_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    closes_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    show_answers: Mapped[bool] = mapped_column(Boolean, default=True)  # tugatishi bilan to'g'ri javoblarni ko'rsatish
+    max_leaves: Mapped[int] = mapped_column(Integer, default=3)       # shuncha marta sahifadan chiqsa — test yakunlanadi
+    # Testning ball qiymati: bir haftadagi (dushanba–yakshanba) testlar jami 100 balldan oshmaydi
+    max_points: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    notified: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    questions: Mapped[list["TestQuestion"]] = relationship(
+        lazy="selectin", cascade="all, delete-orphan", order_by="TestQuestion.position",
+    )
+
+
+class TestQuestion(Base):
+    __tablename__ = "test_questions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    test_id: Mapped[int] = mapped_column(ForeignKey("tests.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(10))   # single | multiple | short
+    text: Mapped[str] = mapped_column(Text)
+    points: Mapped[int] = mapped_column(Integer, default=1)
+    options: Mapped[list] = mapped_column(JSON, default=list)   # [{"id": "a", "text": "..."}]
+    correct: Mapped[list] = mapped_column(JSON, default=list)   # variant id lari yoki qabul qilinadigan qisqa javoblar
+
+
+class TestAttempt(TimestampMixin, Base):
+    __tablename__ = "test_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    test_id: Mapped[int] = mapped_column(ForeignKey("tests.id", ondelete="CASCADE"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    attempt_no: Mapped[int] = mapped_column(Integer, default=1)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finish_reason: Mapped[str | None] = mapped_column(String(20))  # submitted | timeout | left_page
+    leaves: Mapped[int] = mapped_column(Integer, default=0)
+    order: Mapped[dict] = mapped_column(JSON, default=dict)     # shu o'quvchi uchun aralashtirilgan tartib
+    answers: Mapped[dict] = mapped_column(JSON, default=dict)   # {question_id: [variantlar] yoki "matn"}
+    results: Mapped[dict] = mapped_column(JSON, default=dict)   # {question_id: {"earned": .., "max": .., "correct": bool}}
+    score: Mapped[int | None] = mapped_column(Integer)          # 0–100
+    ai_pending: Mapped[bool] = mapped_column(Boolean, default=False)  # qisqa javoblarni AI tekshirmoqda
+
+
+class TestRetake(TimestampMixin, Base):
+    """Mentor bergan qayta topshirish ruxsati (bitta urinish uchun)."""
+    __tablename__ = "test_retakes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    test_id: Mapped[int] = mapped_column(ForeignKey("tests.id", ondelete="CASCADE"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    granted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class RatingAward(TimestampMixin, Base):
+    """Oy yakunida guruhning 1–3-o'rinlari (tabrik bir marta yuboriladi, profil nishonlari uchun)."""
+    __tablename__ = "rating_awards"
+    __table_args__ = (UniqueConstraint("group_id", "period_start", "student_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    place: Mapped[int] = mapped_column(Integer)
+    points: Mapped[float] = mapped_column(Float)
+
+
+class Notification(Base):
+    """Ilova ichidagi bildirishnoma (qo'ng'iroqcha). Telegram xabari bilan birga yoziladi."""
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str | None] = mapped_column(Text)
+    link: Mapped[str | None] = mapped_column(String(300))  # ilova ichidagi sahifa: /homework/12
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class PendingInvite(Base):
+    """Bot guruh havolasini ko'rsatgan foydalanuvchi: ilovani istalgan tugmadan ochsa ham havola eslab qolinadi."""
+    __tablename__ = "pending_invites"
+
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    token: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

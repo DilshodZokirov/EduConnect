@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { todayISO } from '../../dates.js';
 import { useApi } from '../../hooks.jsx';
 import Icon from '../../components/Icon.jsx';
-import { Chip, Content, EmptyState, ErrorBox, Header, Loading } from '../../components/ui.jsx';
+import { Button, Chip, Content, EmptyState, ErrorBox, Header, IconButton, Loading } from '../../components/ui.jsx';
 
 const STORAGE_KEY = 'mentor.group';
 const readSaved = () => { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } };
@@ -32,9 +32,11 @@ export default function MentorHome() {
   const lessons = useApi(group ? `/mentor/groups/${group.id}/lessons` : null);
   const students = useApi(group ? `/mentor/groups/${group.id}/students` : null);
   const homework = useApi(group ? `/mentor/groups/${group.id}/assignments` : null);
+  const tests = useApi(group ? `/mentor/groups/${group.id}/tests` : null);
   const today = lessons.data?.find((l) => l.lesson_date === todayISO());
   const attendance = useApi(today ? `/mentor/lessons/${today.id}/attendance` : null);
 
+  const addBtn = <IconButton icon="plus" label="Yangi guruh" onClick={() => navigate('/groups/new')} />;
   if (groups.loading && !groups.data) return <><Header title="Mening guruhim" /><Loading /></>;
   if (groups.error) return <><Header title="Mening guruhim" /><Content><ErrorBox text={groups.error} onRetry={groups.reload} /></Content></>;
   if (!group) {
@@ -42,8 +44,9 @@ export default function MentorHome() {
       <>
         <Header title="Mening guruhim" />
         <Content>
-          <EmptyState icon="book" title="Sizga hali guruh biriktirilmagan"
-            text="Admin sizni guruhga mentor qilib biriktirgach, guruh shu yerda paydo bo'ladi." />
+          <EmptyState icon="book" title="Hali guruhingiz yo'q"
+            text="Guruh yarating va uning havolasini o'quvchilarga yuboring — ular o'zi qo'shiladi."
+            action={<Button onClick={() => navigate('/groups/new')}>Guruh yaratish</Button>} />
         </Content>
       </>
     );
@@ -54,13 +57,15 @@ export default function MentorHome() {
   const linked = students.data?.filter((s) => s.confirmed_parents > 0).length;
   const marked = attendance.data?.length > 0;
 
+  const nowTs = Date.now();
+  const openTests = tests.data?.filter((t) => new Date(t.opens_at) <= nowTs && nowTs <= new Date(t.closes_at)).length ?? 0;
   const toCheck = homework.data?.reduce((n, a) => n + a.to_review + a.to_approve, 0) ?? 0;
   let attendanceSub = "Bugun dars yo'q";
   if (today) attendanceSub = marked ? 'Bugun belgilangan' : 'Bugun belgilanmagan';
 
   return (
     <>
-      <Header title="Mening guruhim" />
+      <Header title="Mening guruhim" right={addBtn} />
       <Content>
         <div className="hero-card">
           <div className="kv">
@@ -80,6 +85,10 @@ export default function MentorHome() {
               ))}
             </div>
           )}
+          <div className="row hero-actions">
+            <button type="button" className="hero-btn hero-btn-light" onClick={() => navigate(`${base}/invite`)}>🔗 Taklif havolasi</button>
+            <button type="button" className="hero-btn" onClick={() => navigate(`${base}/settings`)}>Sozlamalar</button>
+          </div>
           <div className="hero-divider" />
           <p className="hero-label">Bugungi dars</p>
           <p className="hero-lesson">{today ? today.title : 'Hali yaratilmagan'}</p>
@@ -97,6 +106,11 @@ export default function MentorHome() {
           <Tile icon="sparkle" title="Uy vazifalari" warn={toCheck > 0}
             sub={homework.data ? (toCheck ? `${toCheck} ta tekshirish kerak` : `${homework.data.length} ta vazifa`) : '…'}
             onClick={() => navigate(`${base}/homework`)} />
+          <Tile icon="tag" title="Chegirmalar" sub="Guruhingiz uchun" onClick={() => navigate(`${base}/discounts`)} />
+          <Tile icon="trophy" title="Reyting" sub="Guruh o'quvchilari o'rni" onClick={() => navigate(`${base}/rating`)} />
+          <Tile icon="test" title="Testlar"
+            sub={tests.data ? (openTests ? `${openTests} ta ochiq test` : `${tests.data.length} ta test`) : '…'}
+            onClick={() => navigate(`${base}/tests`)} />
         </div>
       </Content>
     </>

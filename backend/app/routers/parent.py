@@ -25,7 +25,7 @@ async def my_links(status_: LinkStatus | None = Query(default=None, alias="statu
         student = await session.get(User, link.student_id)
         result.append(ParentLinkOut(id=link.id, parent=UserShort.model_validate(user),
                                     student=UserShort.model_validate(student), status=link.status,
-                                    created_at=link.created_at))
+                                    created_at=link.created_at, requested_by_parent=link.requested_by_parent))
     return result
 
 
@@ -35,7 +35,8 @@ async def decide_link(link_id: int, decision: str, user: User = ParentUserUnlock
     if decision not in ("confirm", "reject"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "confirm yoki reject")
     link = await session.get(ParentLink, link_id)
-    if link is None or link.parent_id != user.id or link.status != LinkStatus.pending:
+    if (link is None or link.parent_id != user.id or link.status != LinkStatus.pending
+            or link.requested_by_parent):  # ota-ona o'zi so'ragan bo'lsa — o'qituvchi tasdiqlaydi
         raise HTTPException(status.HTTP_404_NOT_FOUND, "So'rov topilmadi")
     link.status = LinkStatus.confirmed if decision == "confirm" else LinkStatus.rejected
     link.decided_at = datetime.now(timezone.utc)

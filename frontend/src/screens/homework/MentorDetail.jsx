@@ -8,6 +8,7 @@ import {
   Avatar, Button, Card, Chip, Content, ErrorBox, Header, Loading, Pill, useTelegramBack,
 } from '../../components/ui.jsx';
 import { AnswerText, CriteriaList, ScorePill, SubmissionImages, TaskFileButton } from './shared.jsx';
+import { TestResults } from './CodeTask.jsx';
 
 const NEEDS_MENTOR = ['review', 'failed', 'manual'];
 const AI_LABEL = {
@@ -88,11 +89,18 @@ function SubmissionCard({ sub, onChanged }) {
             </>
           )}
           {sub.late && <Pill tone="warn">Kech topshirildi</Pill>}
+          {sub.tests_total ? <Pill tone={sub.tests_passed === sub.tests_total ? 'blue' : 'warn'}>Misollar {sub.tests_passed}/{sub.tests_total}</Pill> : null}
         </div>
       </button>
       {open && (
         <>
-          <AnswerText text={sub.text} isCode={sub.is_code} />
+          <AnswerText text={sub.text} isCode={sub.is_code} language={sub.language} />
+          {sub.tests_total ? (
+            <div className="stack">
+              <b className="small">Avtomatik misollar: {sub.tests_passed} / {sub.tests_total} o'tdi</b>
+              <TestResults results={sub.test_results} />
+            </div>
+          ) : null}
           <SubmissionImages files={sub.files} />
           {sub.ai_feedback && (
             <div className="ai-box">

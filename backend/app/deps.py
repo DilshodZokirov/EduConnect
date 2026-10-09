@@ -56,8 +56,12 @@ def require_roles(*roles: Role, check_lock: bool = False):
     return dependency
 
 
-AdminUser = Depends(require_roles(Role.admin, Role.superadmin))
-MentorUser = Depends(require_roles(Role.mentor, Role.admin, Role.superadmin))
+STAFF = (Role.admin, Role.regional_manager, Role.general_manager, Role.superadmin)
+AdminUser = Depends(require_roles(*STAFF))  # filial admini va undan yuqorilar (ko'rinish filial bo'yicha cheklanadi)
+ManagerUser = Depends(require_roles(Role.regional_manager, Role.general_manager, Role.superadmin))
+GeneralUser = Depends(require_roles(Role.general_manager, Role.superadmin))
+SuperUser = Depends(require_roles(Role.superadmin))
+MentorUser = Depends(require_roles(Role.mentor, *STAFF))
 StudentUser = Depends(require_roles(Role.student, check_lock=True))
 ParentUser = Depends(require_roles(Role.parent, check_lock=True))
 # Qulflangan ota-ona ham bog'lanish so'rovini va qarzini ko'ra olishi kerak
